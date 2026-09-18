@@ -57,9 +57,16 @@ export function logCheckpointTool(server: McpServer): void {
                     .describe(
                         "Searchable tags for filtering history later (e.g. ['critical', 'user-facing', 'financial'])"
                     ),
+                parent_checkpoint_id: z
+                    .string()
+                    .uuid()
+                    .optional()
+                    .describe(
+                        "UUID of the parent checkpoint this one depends on. Set this when your current reasoning step was triggered by or depends on a previous checkpoint. Enables causal chain analysis."
+                    ),
             },
         },
-        async ({ session_id, checkpoint_type, content, metadata, tags }) => {
+        async ({ session_id, checkpoint_type, content, metadata, tags, parent_checkpoint_id }) => {
             try {
                 const checkpointId = crypto.randomUUID();
                 const now = new Date().toISOString();
@@ -71,6 +78,7 @@ export function logCheckpointTool(server: McpServer): void {
                     content,
                     metadata: metadata ?? undefined,
                     tags: tags && tags.length > 0 ? tags : undefined,
+                    parent_checkpoint_id: parent_checkpoint_id ?? null,
                     created_at: now,
                 };
 
@@ -81,6 +89,7 @@ export function logCheckpointTool(server: McpServer): void {
                     checkpoint_id: checkpointId,
                     session_id,
                     checkpoint_type,
+                    parent_checkpoint_id: parent_checkpoint_id ?? null,
                     timestamp: now,
                 };
 

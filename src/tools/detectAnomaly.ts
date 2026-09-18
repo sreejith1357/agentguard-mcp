@@ -7,6 +7,9 @@
  * For numeric values: uses z-score (standard deviations from baseline mean).
  * For string values: uses Levenshtein similarity ratio against baseline strings.
  *
+ * Can use manually provided baselines OR learned baselines automatically from
+ * the Adaptive Baseline Learning system (when confidence >= 50%).
+ *
  * No external libraries — all math is implemented inline to keep the
  * dependency footprint at zero and the logic fully auditable.
  */
@@ -14,6 +17,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildResponse, buildErrorResponse } from "../utils/response.js";
+import { getBaseline } from "../utils/metricStore.js";
 import type {
     AnomalyReport,
     AnomalySensitivity,
@@ -113,7 +117,7 @@ function classifyStringSeverity(
 }
 
 // ---------------------------------------------------------------------------
-// Numeric anomaly detection
+// Numeric anomaly detection (Manual baseline)
 // ---------------------------------------------------------------------------
 
 function detectNumeric(
@@ -156,10 +160,6 @@ function detectNumeric(
         ? `Severity is ${severity.toUpperCase()}. Investigate "${metricName}" before proceeding. Value ${value} deviates significantly from baseline mean of ${avg.toFixed(4)}.`
         : `Value is statistically consistent with baseline. Safe to proceed.`;
 
-    // Clamp Infinity to a large finite sentinel so JSON.stringify produces a
-    // number rather than null. Infinity arises when stddev=0 and value≠avg
-    // (e.g. single-value baseline). 999999 is large enough to always exceed
-    // every sensitivity threshold and unambiguously signal "maximal deviation".
     const safeZScore = isFinite(zScore)
         ? Math.round(zScore * 10000) / 10000
         : (zScore > 0 ? 999999 : -999999);
@@ -176,12 +176,13 @@ function detectNumeric(
         verdict,
         recommendation,
         ...(context && { context }),
+        baseline_source: "manual",
         timestamp: new Date().toISOString(),
     };
 }
 
 // ---------------------------------------------------------------------------
-// String anomaly detection
+// String anomaly detection (Manual baseline)
 // ---------------------------------------------------------------------------
 
 function detectString(
@@ -231,6 +232,7 @@ function detectString(
         verdict,
         recommendation,
         ...(context && { context }),
+        baseline_source: "manual",
         timestamp: new Date().toISOString(),
     };
 }
@@ -243,7 +245,8 @@ export function detectAnomalyTool(server: McpServer): void {
     server.registerTool(
         "detect_anomaly",
         {
-            description: "Compare an agent output or metric against expected baseline patterns and flag statistical outliers before they propagate downstream. Uses z-score analysis for numeric values and Levenshtein similarity for strings.",
+            description:
+                "Compare an agent output or metric against expected baseline patterns and flag statistical outliers before they propagate downstream. Uses z-score analysis for numeric values and Levenshtein similarity for strings.",
             inputSchema: {
                 value: z
                     .union([z.number(), z.string()])
@@ -253,14 +256,17 @@ export function detectAnomalyTool(server: McpServer): void {
                         z.array(z.number()).min(1).max(1000),
                         z.array(z.string()).min(1).max(1000),
                     ])
+                    .optional()
                     .describe(
-                        "Historical or expected comparison set. Must be same type as value (all numbers or all strings). Minimum 1 item, maximum 1000, recommended 5+ for statistical reliability."
+                        "Historical or expected comparison set. Must be same type as value (all numbers or all strings). Minimum 1 item, maximum 1000. Optional if a confident learned baseline exists."
                     ),
                 metric_name: z
                     .string()
                     .min(1)
                     .max(128)
-                    .describe("Human-readable name for the metric being checked (e.g. 'response_latency_ms', 'confidence_score', 'output_format')"),
+                    .describe(
+                        "Human-readable name for the metric being checked (e.g. 'response_latency_ms', 'confidence_score', 'output_format')"
+                    ),
                 sensitivity: z
                     .enum(["low", "medium", "high"])
                     .optional()
@@ -272,61 +278,179 @@ export function detectAnomalyTool(server: McpServer): void {
                     .string()
                     .max(512)
                     .optional()
-                    .describe("Optional agent-provided context about what this metric represents"),
+                    .describe(
+                        "Optional agent-provided context about what this metric represents"
+                    ),
             },
         },
         async ({ value, baseline, metric_name, sensitivity, context }) => {
             try {
-                // Type-check baseline matches value type
-                if (typeof value === "number") {
-                    if (!baseline.every((b) => typeof b === "number")) {
-                        return buildResponse<AnomalyReport>({
-                            anomaly_detected: false,
-                            metric_name,
-                            observed_value: value,
-                            value_type: "numeric",
-                            baseline_summary: { mean: 0, stddev: 0, min: 0, max: 0, count: 0 },
-                            severity: "none",
-                            sensitivity_used: sensitivity ?? "medium",
-                            verdict: "❌ Type mismatch: value is numeric but baseline contains non-numeric values",
-                            recommendation: "Ensure all baseline values are numbers when checking a numeric metric",
-                            timestamp: new Date().toISOString(),
-                        });
+                const sens = sensitivity ?? "medium";
+                const hasManualBaseline =
+                    baseline !== undefined &&
+                    Array.isArray(baseline) &&
+                    baseline.length > 0;
+
+                // -----------------------------------------------------------
+                // Case 1: Manual baseline provided by caller
+                // -----------------------------------------------------------
+                if (hasManualBaseline) {
+                    if (typeof value === "number") {
+                        if (!baseline!.every((b) => typeof b === "number")) {
+                            return buildResponse<AnomalyReport>({
+                                anomaly_detected: false,
+                                metric_name,
+                                observed_value: value,
+                                value_type: "numeric",
+                                baseline_summary: {
+                                    mean: 0,
+                                    stddev: 0,
+                                    min: 0,
+                                    max: 0,
+                                    count: 0,
+                                },
+                                severity: "none",
+                                sensitivity_used: sens,
+                                verdict:
+                                    "❌ Type mismatch: value is numeric but baseline contains non-numeric values",
+                                recommendation:
+                                    "Ensure all baseline values are numbers when checking a numeric metric",
+                                baseline_source: "manual",
+                                timestamp: new Date().toISOString(),
+                            });
+                        }
+                        return buildResponse(
+                            detectNumeric(
+                                value,
+                                baseline as number[],
+                                sens,
+                                metric_name,
+                                context
+                            )
+                        );
+                    } else {
+                        if (!baseline!.every((b) => typeof b === "string")) {
+                            return buildResponse<AnomalyReport>({
+                                anomaly_detected: false,
+                                metric_name,
+                                observed_value: value,
+                                value_type: "string",
+                                baseline_summary: {
+                                    min_similarity: 0,
+                                    max_similarity: 0,
+                                    avg_similarity: 0,
+                                    count: 0,
+                                },
+                                severity: "none",
+                                sensitivity_used: sens,
+                                verdict:
+                                    "❌ Type mismatch: value is string but baseline contains non-string values",
+                                recommendation:
+                                    "Ensure all baseline values are strings when checking a string metric",
+                                baseline_source: "manual",
+                                timestamp: new Date().toISOString(),
+                            });
+                        }
+                        return buildResponse(
+                            detectString(
+                                value,
+                                baseline as string[],
+                                sens,
+                                metric_name,
+                                context
+                            )
+                        );
                     }
-                    return buildResponse(
-                        detectNumeric(
-                            value,
-                            baseline as number[],
-                            sensitivity ?? "medium",
-                            metric_name,
-                            context
-                        )
-                    );
-                } else {
-                    if (!baseline.every((b) => typeof b === "string")) {
-                        return buildResponse<AnomalyReport>({
-                            anomaly_detected: false,
-                            metric_name,
-                            observed_value: value,
-                            value_type: "string",
-                            baseline_summary: { min_similarity: 0, max_similarity: 0, avg_similarity: 0, count: 0 },
-                            severity: "none",
-                            sensitivity_used: sensitivity ?? "medium",
-                            verdict: "❌ Type mismatch: value is string but baseline contains non-string values",
-                            recommendation: "Ensure all baseline values are strings when checking a string metric",
-                            timestamp: new Date().toISOString(),
-                        });
-                    }
-                    return buildResponse(
-                        detectString(
-                            value,
-                            baseline as string[],
-                            sensitivity ?? "medium",
-                            metric_name,
-                            context
-                        )
-                    );
                 }
+
+                // -----------------------------------------------------------
+                // Case 2: No manual baseline — check for learned baseline
+                // -----------------------------------------------------------
+                const learnedRow = getBaseline(metric_name);
+                const windowSize = learnedRow?.window_size ?? 20;
+                const confidencePercent = learnedRow
+                    ? Number(
+                          (
+                              Math.min(
+                                  learnedRow.observation_count / windowSize,
+                                  1.0
+                              ) * 100
+                          ).toFixed(2)
+                      )
+                    : 0;
+
+                if (
+                    learnedRow &&
+                    confidencePercent >= 50 &&
+                    typeof value === "number"
+                ) {
+                    const avg = learnedRow.ema_mean;
+                    const sd = Math.sqrt(learnedRow.ema_variance);
+                    const threshold = Z_SCORE_THRESHOLDS[sens];
+
+                    let zScore: number;
+                    if (sd === 0) {
+                        zScore = value === avg ? 0 : Infinity;
+                    } else {
+                        zScore = (value - avg) / sd;
+                    }
+
+                    const anomalyDetected = Math.abs(zScore) > threshold;
+                    const severity = classifyNumericSeverity(zScore, sens);
+
+                    const baselineSummary: BaselineSummaryNumeric = {
+                        mean: Math.round(avg * 10000) / 10000,
+                        stddev: Math.round(sd * 10000) / 10000,
+                        min: Math.round((avg - 3 * sd) * 10000) / 10000,
+                        max: Math.round((avg + 3 * sd) * 10000) / 10000,
+                        count: learnedRow.observation_count,
+                    };
+
+                    const verdict = anomalyDetected
+                        ? `⚠️ Anomaly detected on "${metric_name}": z-score ${zScore.toFixed(3)} exceeds ${threshold}σ threshold (${sens} sensitivity)`
+                        : `✅ "${metric_name}" is within normal range: z-score ${zScore.toFixed(3)} ≤ ${threshold}σ`;
+
+                    const recommendation = anomalyDetected
+                        ? `Severity is ${severity.toUpperCase()}. Investigate "${metric_name}" before proceeding. Value ${value} deviates significantly from learned baseline mean of ${avg.toFixed(4)}.`
+                        : `Value is statistically consistent with learned baseline. Safe to proceed.`;
+
+                    const safeZScore = isFinite(zScore)
+                        ? Math.round(zScore * 10000) / 10000
+                        : (zScore > 0 ? 999999 : -999999);
+
+                    return buildResponse<AnomalyReport>({
+                        anomaly_detected: anomalyDetected,
+                        metric_name,
+                        observed_value: value,
+                        value_type: "numeric",
+                        baseline_summary: baselineSummary,
+                        z_score: safeZScore,
+                        severity,
+                        sensitivity_used: sens,
+                        verdict,
+                        recommendation,
+                        ...(context && { context }),
+                        baseline_source: "learned",
+                        learned_baseline_info: {
+                            mean: Math.round(avg * 10000) / 10000,
+                            stddev: Math.round(sd * 10000) / 10000,
+                            confidence_percent: confidencePercent,
+                            observation_count: learnedRow.observation_count,
+                        },
+                        timestamp: new Date().toISOString(),
+                    });
+                }
+
+                // -----------------------------------------------------------
+                // Case 3: Neither manual baseline nor confident learned baseline
+                // -----------------------------------------------------------
+                return buildResponse({
+                    error: "BASELINE_REQUIRED",
+                    metric_name,
+                    message: `No manual baseline provided and no confident learned baseline found for metric "${metric_name}". Either provide a manual baseline array or use record_observation to train a baseline.`,
+                    hint: "Use record_observation to record observations over time, or supply a baseline array directly.",
+                    timestamp: new Date().toISOString(),
+                });
             } catch (error) {
                 return buildErrorResponse("detect_anomaly", error);
             }

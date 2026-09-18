@@ -13,7 +13,13 @@ import { validateToolResponseTool } from "./tools/validateToolResponse.js";
 import { logCheckpointTool } from "./tools/logCheckpoint.js";
 import { detectAnomalyTool } from "./tools/detectAnomaly.js";
 import { getSessionHistoryTool } from "./tools/getSessionHistory.js";
+import { circuitBreakerTools } from "./tools/circuitBreaker.js";
+import { causalChainTools } from "./tools/causalChain.js";
+import { adaptiveBaselineTools } from "./tools/adaptiveBaseline.js";
 import { getStorageStats } from "./utils/storage.js";
+import { getAllCircuits } from "./utils/circuitStore.js";
+import { getBaselineStats } from "./utils/metricStore.js";
+import { initializeDatabase } from "./db/schema.js";
 
 // ---------------------------------------------------------------------------
 // Server setup
@@ -65,7 +71,7 @@ app.use(
 );
 
 const SERVER_NAME = "AgentGuard MCP";
-const SERVER_VERSION = "1.0.0";
+const SERVER_VERSION = "2.0.0";
 const START_TIME = Date.now();
 
 const REGISTERED_TOOLS = [
@@ -74,6 +80,15 @@ const REGISTERED_TOOLS = [
     "log_checkpoint",
     "detect_anomaly",
     "get_session_history",
+    // Circuit Breaker (v2.0.0)
+    "report_tool_result",
+    "get_circuit_state",
+    "reset_circuit",
+    // Causal Chain (v2.0.0)
+    "analyze_causality",
+    // Adaptive Baseline Learning (v2.0.0)
+    "record_observation",
+    "get_learned_baseline",
 ] as const;
 
 // Create MCP server
@@ -90,6 +105,10 @@ validateToolResponseTool(server);
 logCheckpointTool(server);
 detectAnomalyTool(server);
 getSessionHistoryTool(server);
+// v2.0.0 tools
+circuitBreakerTools(server);
+causalChainTools(server);
+adaptiveBaselineTools(server);
 
 // ---------------------------------------------------------------------------
 // MCP endpoint — stateless StreamableHTTP (MCP protocol rev. July 2026)
@@ -127,6 +146,26 @@ app.get("/health", async (_req: Request, res: Response) => {
         total_checkpoints: -1,
     }));
 
+    // Circuit breaker stats — synchronous SQLite read, wrapped for safety
+    let total_circuits = 0;
+    let open_circuits = 0;
+    let half_open_circuits = 0;
+    try {
+        const circuits = getAllCircuits();
+        total_circuits = circuits.length;
+        open_circuits = circuits.filter((c) => c.state === "OPEN").length;
+        half_open_circuits = circuits.filter((c) => c.state === "HALF_OPEN").length;
+    } catch { /* non-fatal */ }
+
+    // Adaptive baseline stats
+    let total_metrics_tracked = 0;
+    let confident_baselines = 0;
+    try {
+        const baselineStats = getBaselineStats();
+        total_metrics_tracked = baselineStats.total_metrics_tracked;
+        confident_baselines = baselineStats.confident_baselines;
+    } catch { /* non-fatal */ }
+
     res.json({
         status: "ok",
         server: SERVER_NAME,
@@ -139,6 +178,17 @@ app.get("/health", async (_req: Request, res: Response) => {
             total_sessions: storage.total_sessions,
             total_checkpoints: storage.total_checkpoints,
             checkpoint_limit_per_session: parseInt(process.env.MAX_CHECKPOINTS ?? "10000", 10),
+        },
+        v2_systems: {
+            circuit_breaker: {
+                total_circuits,
+                open_circuits,
+                half_open_circuits,
+            },
+            adaptive_baseline: {
+                total_metrics_tracked,
+                confident_baselines,
+            },
         },
         timestamp: new Date().toISOString(),
     });
@@ -159,6 +209,10 @@ app.use((_req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
+
+// Ensure SQLite tables exist before the server accepts any traffic
+initializeDatabase();
+console.log("[AgentGuard] SQLite database initialized at agentguard.db");
 
 const PORT = process.env.PORT || 3000;
 

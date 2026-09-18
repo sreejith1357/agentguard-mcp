@@ -6,7 +6,7 @@ AgentGuard sits between your AI agent and its tools as a safety net — detectin
 
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/your-org/agentguard-mcp)
 [![Node.js](https://img.shields.io/badge/Node.js-24-green)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue)](https://typescriptlang.org)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/your-org/agentguard-mcp)
 [![MCP SDK](https://img.shields.io/badge/MCP_SDK-1.30.0-purple)](https://github.com/modelcontextprotocol/typescript-sdk)
 [![License: ISC](https://img.shields.io/badge/License-ISC-yellow)](LICENSE)
 
@@ -387,6 +387,145 @@ curl -X POST http://localhost:3000/mcp \
   "timestamp": "2024-01-15T10:00:12.000Z"
 }
 ```
+
+---
+
+## v2.0.0 — Advanced Systems
+
+AgentGuard v2.0.0 adds three persistent SQLite-backed reliability and observability systems to safeguard autonomous AI agent operations.
+
+### 1. Circuit Breaker System
+Automatically tracks success/failure metrics for external tools and endpoints. When a tool experiences 5 consecutive failures, the circuit breaker opens to halt cascading failures, conserve API tokens, and give downstream services time to recover. After a 60-second cooldown, the breaker transitions to `HALF_OPEN` for canary testing.
+
+#### `report_tool_result`
+```bash
+curl -X POST http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "report_tool_result",
+      "arguments": {
+        "tool_name": "weather_api",
+        "success": false,
+        "error_message": "HTTP 503 Service Unavailable"
+      }
+    }
+  }'
+```
+
+#### `get_circuit_state`
+```bash
+curl -X POST http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "get_circuit_state",
+      "arguments": {
+        "tool_name": "weather_api"
+      }
+    }
+  }'
+```
+
+#### `reset_circuit`
+```bash
+curl -X POST http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "reset_circuit",
+      "arguments": {
+        "tool_name": "weather_api",
+        "reason": "API endpoint recovered"
+      }
+    }
+  }'
+```
+
+---
+
+### 2. Causal Chain Analysis
+Traces reasoning dependency trees using `parent_checkpoint_id` references on checkpoints. When an agent step fails, `analyze_causality` performs Breadth-First Search (BFS) to identify the root cause step that triggered the failure propagation across the reasoning chain and outputs a confidence score.
+
+#### `analyze_causality`
+```bash
+curl -X POST http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+      "name": "analyze_causality",
+      "arguments": {
+        "session_id": "v2-test-001",
+        "failed_checkpoint_ids": ["74f0a22a-724d-4837-89df-32414dbf6204"]
+      }
+    }
+  }'
+```
+
+---
+
+### 3. Adaptive Baseline Learning
+Continuously updates numeric metric statistics using online Exponential Moving Average (EMA) as values are recorded over time. After 20+ observations, baselines reach confident status and `detect_anomaly` automatically uses learned baselines without requiring manual baseline arrays.
+
+#### `record_observation`
+```bash
+curl -X POST http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "tools/call",
+    "params": {
+      "name": "record_observation",
+      "arguments": {
+        "metric_name": "api.latency",
+        "value": 128
+      }
+    }
+  }'
+```
+
+#### `get_learned_baseline`
+```bash
+curl -X POST http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "tools/call",
+    "params": {
+      "name": "get_learned_baseline",
+      "arguments": {
+        "metric_name": "api.latency",
+        "include_recent_observations": true
+      }
+    }
+  }'
+```
+
+---
+
+### How They Work Together
+
+Before calling an external dependency, the agent checks `get_circuit_state` to ensure the circuit is `CLOSED`. If healthy, the agent executes the tool call and immediately reports the outcome using `report_tool_result`. Numeric metrics (such as latency or response size) are recorded via `record_observation`, feeding into AgentGuard's SQLite storage. As observations accumulate, the Adaptive Baseline Learning system calculates statistical mean and variance, enabling `detect_anomaly` to auto-detect drift and outliers without manual input sets. If a failure occurs downstream, `analyze_causality` walks the reasoning chain to isolate the exact root cause checkpoint.
 
 ---
 

@@ -65,6 +65,8 @@ export interface CheckpointEntry {
     content: string;
     metadata?: Record<string, unknown>;
     tags?: string[];
+    /** UUID of the parent checkpoint this one causally depends on. null = root node. */
+    parent_checkpoint_id: string | null;
     created_at: string;
 }
 
@@ -73,6 +75,7 @@ export interface LogCheckpointResult {
     checkpoint_id: string;
     session_id: string;
     checkpoint_type: CheckpointType;
+    parent_checkpoint_id: string | null;
     timestamp: string;
 }
 
@@ -111,6 +114,13 @@ export interface AnomalyReport {
     verdict: string;
     recommendation: string;
     context?: string;
+    baseline_source?: "manual" | "learned";
+    learned_baseline_info?: {
+        mean: number;
+        stddev: number;
+        confidence_percent: number;
+        observation_count: number;
+    };
     timestamp: string;
 }
 
@@ -132,3 +142,47 @@ export interface SessionHistoryResult {
     };
     timestamp: string;
 }
+
+// ---------------------------------------------------------------------------
+// v2.0.0 — SQLite Database Types
+// ---------------------------------------------------------------------------
+
+/** The three states a circuit breaker can be in. */
+export type CircuitState = "CLOSED" | "OPEN" | "HALF_OPEN";
+
+/**
+ * A row in the circuit_breakers table.
+ * null fields map to SQL NULL (e.g. last_failure_at before any failure).
+ */
+export interface CircuitRow {
+    name: string;
+    state: CircuitState;
+    failure_count: number;
+    success_count: number;
+    last_failure_at: string | null;
+    last_success_at: string | null;
+    opened_at: string | null;
+    half_opened_at: string | null;
+    updated_at: string;
+}
+
+/** A row in the metric_baselines table (one per metric). */
+export interface BaselineRow {
+    metric_name: string;
+    ema_mean: number;
+    ema_variance: number;
+    observation_count: number;
+    first_observed_at: string;
+    last_observed_at: string;
+    window_size: number;
+    updated_at: string;
+}
+
+/** A row in the metric_observations table (one per data point). */
+export interface ObservationRow {
+    id: number;
+    metric_name: string;
+    value: number;
+    recorded_at: string;
+}
+

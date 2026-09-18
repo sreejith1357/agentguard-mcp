@@ -1,6 +1,6 @@
 {
   "name": "agentguard-mcp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Production-grade reliability and observability infrastructure for AI agents.",
   "repository": {
     "type": "git",
@@ -21,6 +21,7 @@
   "type": "commonjs",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "better-sqlite3": "^13.0.3",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
@@ -29,11 +30,15 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/morgan": "^1.9.10",
     "@types/node": "^22.20.3",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.3": true
   }
 }
