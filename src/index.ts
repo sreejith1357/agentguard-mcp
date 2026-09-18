@@ -51,7 +51,7 @@ app.use(express.json({ limit: "2mb" }));
 // ---------------------------------------------------------------------------
 
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
-const RATE_LIMIT_MAX = 100;
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "100", 10);
 
 app.use(
     rateLimit({
