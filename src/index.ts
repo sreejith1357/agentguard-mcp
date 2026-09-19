@@ -20,6 +20,7 @@ import { getStorageStats } from "./utils/storage.js";
 import { getAllCircuits } from "./utils/circuitStore.js";
 import { getBaselineStats } from "./utils/metricStore.js";
 import { initializeDatabase } from "./db/schema.js";
+import { authenticateRequest } from "./utils/auth.js";
 
 // ---------------------------------------------------------------------------
 // Server setup
@@ -71,7 +72,7 @@ app.use(
 );
 
 const SERVER_NAME = "AgentGuard MCP";
-const SERVER_VERSION = "2.0.0";
+const SERVER_VERSION = "2.1.0";
 const START_TIME = Date.now();
 
 const REGISTERED_TOOLS = [
@@ -109,6 +110,26 @@ getSessionHistoryTool(server);
 circuitBreakerTools(server);
 causalChainTools(server);
 adaptiveBaselineTools(server);
+
+// ---------------------------------------------------------------------------
+// Authentication middleware — protects MCP tool calls via Bearer token
+// ---------------------------------------------------------------------------
+
+app.use("/mcp", (req: Request, res: Response, next: NextFunction) => {
+    if (req.method === "POST") {
+        const result = authenticateRequest(req);
+        if (!result.authenticated) {
+            res.status(401).json({
+                error: "UNAUTHORIZED",
+                message: result.error,
+                hint: "Set AGENTGUARD_API_KEY environment variable and pass it as: Authorization: Bearer <key>",
+                timestamp: new Date().toISOString(),
+            });
+            return;
+        }
+    }
+    next();
+});
 
 // ---------------------------------------------------------------------------
 // MCP endpoint — stateless StreamableHTTP (MCP protocol rev. July 2026)
@@ -179,6 +200,8 @@ app.get("/health", async (_req: Request, res: Response) => {
             total_checkpoints: storage.total_checkpoints,
             checkpoint_limit_per_session: parseInt(process.env.MAX_CHECKPOINTS ?? "10000", 10),
         },
+        storage_mode: "sqlite_single_instance",
+        storage_note: "SQLite and JSONL are local to this instance. Multi-instance deployments require an external database.",
         v2_systems: {
             circuit_breaker: {
                 total_circuits,
@@ -190,6 +213,9 @@ app.get("/health", async (_req: Request, res: Response) => {
                 confident_baselines,
             },
         },
+        auth_mode: process.env.AGENTGUARD_API_KEY
+            ? "authenticated"
+            : "open (no key set)",
         timestamp: new Date().toISOString(),
     });
 });
@@ -228,6 +254,17 @@ const httpServer = app.listen(PORT, () => {
     REGISTERED_TOOLS.forEach((t) => console.log(`│    • ${t.padEnd(33)}│`));
     console.log("└─────────────────────────────────────────┘");
     console.log("");
+    console.log(
+        "[AgentGuard] ⚠️  Storage: SQLite + JSONL (single-instance). For multi-instance deployments, migrate to PostgreSQL."
+    );
+
+    if (!process.env.AGENTGUARD_API_KEY) {
+        console.warn(
+            "[AgentGuard] ⚠️  AGENTGUARD_API_KEY not set — running in open mode. Set this in production."
+        );
+    } else {
+        console.log("[AgentGuard] ✅  API key authentication enabled");
+    }
 });
 
 // ---------------------------------------------------------------------------

@@ -5,3 +5,4 @@ data/*.jsonl
 *.env.local
 *.env.*.local
 .DS_Store
+agentguard.db*

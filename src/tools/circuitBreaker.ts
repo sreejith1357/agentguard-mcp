@@ -59,7 +59,7 @@ export function circuitBreakerTools(server: McpServer): void {
                     .min(1)
                     .max(128)
                     .describe(
-                        "Unique identifier for the tool or endpoint being tracked (e.g. 'stripe_charge', 'openai_completions')."
+                        "Unique identifier for this circuit. For multi-tenant deployments use a namespaced format: 'tenant/environment/tool_name' (e.g. 'acme/prod/payment_api'). Without namespacing, circuit state is shared globally across all callers."
                     ),
                 success: z
                     .boolean()
@@ -184,7 +184,7 @@ export function circuitBreakerTools(server: McpServer): void {
                     .min(1)
                     .max(128)
                     .describe(
-                        "The tool or endpoint to check (must match the name used in report_tool_result)."
+                        "Unique identifier for this circuit. For multi-tenant deployments use a namespaced format: 'tenant/environment/tool_name' (e.g. 'acme/prod/payment_api'). Without namespacing, circuit state is shared globally across all callers."
                     ),
                 check_cooldown: z
                     .boolean()
@@ -286,7 +286,7 @@ export function circuitBreakerTools(server: McpServer): void {
                     .min(1)
                     .max(128)
                     .describe(
-                        "The circuit breaker to reset (must match the name used in report_tool_result)."
+                        "Unique identifier for this circuit. For multi-tenant deployments use a namespaced format: 'tenant/environment/tool_name' (e.g. 'acme/prod/payment_api'). Without namespacing, circuit state is shared globally across all callers."
                     ),
                 reason: z
                     .string()

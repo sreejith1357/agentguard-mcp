@@ -284,7 +284,11 @@ export function validateToolResponseTool(server: McpServer): void {
     server.registerTool(
         "validate_tool_response",
         {
-            description: "Inspect data returned from another MCP tool for schema integrity, freshness, and sanity before your agent acts on it. Returns a structured report of all validation checks so you can gate downstream actions on data trustworthiness.",
+            description:
+                "Inspects data returned from another MCP tool for five independent validation checks: " +
+                "1. Required field presence, 2. Field type schema validation, 3. Numeric value bounds checking, " +
+                "4. Data freshness via timestamp age, 5. Custom user-defined validation rules. " +
+                "Returns a structured report of all validation checks so you can gate downstream actions on data trustworthiness.",
             inputSchema: {
                 data: z
                     .union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())])

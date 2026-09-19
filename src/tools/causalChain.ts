@@ -106,10 +106,7 @@ export function causalChainTools(server: McpServer): void {
         "analyze_causality",
         {
             description:
-                "Analyze a session's checkpoint history to find the root cause of failures. " +
-                "Builds a dependency graph from parent_checkpoint_id links and traces failure " +
-                "propagation using Breadth First Search. Returns the root cause checkpoint " +
-                "with a confidence score.",
+                "Traces failed checkpoints through their declared dependency graph and identifies the deepest common ancestor as a root-cause candidate. Dependency is declared via parent_checkpoint_id — this traces structural dependency, not proven causation.",
             inputSchema: {
                 session_id: z
                     .string()
@@ -122,7 +119,7 @@ export function causalChainTools(server: McpServer): void {
                     .max(50)
                     .describe(
                         "UUIDs of checkpoints known to have failed or produced bad output. " +
-                        "The tool traces these back to find the root cause."
+                        "The tool traces these back to find the root-cause candidate."
                     ),
                 include_graph: z
                     .boolean()
@@ -197,7 +194,7 @@ export function causalChainTools(server: McpServer): void {
                 }
 
                 // ---------------------------------------------------------------
-                // Phase 4 — Identify root cause & confidence
+                // Phase 4 — Identify root cause candidate & confidence
                 // ---------------------------------------------------------------
 
                 let rootCauseId:    string | null = null;
@@ -264,7 +261,7 @@ export function causalChainTools(server: McpServer): void {
 
                 // Human-readable analysis summary
                 const summaryParts: string[] = [
-                    `Root cause identified: checkpoint "${rootCauseId.slice(0, 8)}…" ` +
+                    `Root-cause candidate identified: checkpoint "${rootCauseId.slice(0, 8)}…" ` +
                     `(type: ${rootCauseCheckpoint.checkpoint_type}, ` +
                     `confidence: ${confidenceScore}%).`,
                 ];
@@ -295,7 +292,7 @@ export function causalChainTools(server: McpServer): void {
 
                 if (knownFailIds.length === 1 && isRootNode) {
                     summaryParts.push(
-                        "Single failure checkpoint with no parent — it is the root cause (confidence 100%)."
+                        "Single failure checkpoint with no parent — it is the root-cause candidate (confidence 100%)."
                     );
                 }
 
@@ -318,7 +315,7 @@ export function causalChainTools(server: McpServer): void {
 
                 return buildResponse({
                     session_id,
-                    root_cause: {
+                    root_cause_candidate: {
                         checkpoint_id:   rootCauseCheckpoint.id,
                         checkpoint_type: rootCauseCheckpoint.checkpoint_type,
                         content:         rootCauseCheckpoint.content.slice(0, 200),
@@ -331,6 +328,7 @@ export function causalChainTools(server: McpServer): void {
                     failed_checkpoints_found:     knownFailIds.length,
                     unknown_checkpoint_ids:       unknownIds,
                     analysis_summary:             analysisSummary,
+                    dependency_note:              "This analysis traces declared parent_checkpoint_id relationships. It identifies structural dependency ancestors, not proven real-world causation.",
                     ...(include_graph && graphOutput !== undefined && { graph: graphOutput }),
                     timestamp: new Date().toISOString(),
                 });

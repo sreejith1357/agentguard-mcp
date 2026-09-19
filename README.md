@@ -6,7 +6,7 @@ AgentGuard sits between your AI agent and its tools as a safety net — detectin
 
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/your-org/agentguard-mcp)
 [![Node.js](https://img.shields.io/badge/Node.js-24-green)](https://nodejs.org)
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/your-org/agentguard-mcp)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/your-org/agentguard-mcp)
 [![MCP SDK](https://img.shields.io/badge/MCP_SDK-1.30.0-purple)](https://github.com/modelcontextprotocol/typescript-sdk)
 [![License: ISC](https://img.shields.io/badge/License-ISC-yellow)](LICENSE)
 
@@ -109,11 +109,50 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-> **Note:** Option B/C require Claude Desktop 0.10 or later with HTTP transport support.
+---
+
+## Authentication
+
+AgentGuard supports Bearer token authentication.
+
+Set the `AGENTGUARD_API_KEY` environment variable:
+```bash
+AGENTGUARD_API_KEY=your-secret-key
+```
+
+Then pass it on every MCP request:
+```
+Authorization: Bearer your-secret-key
+```
+
+Without `AGENTGUARD_API_KEY` set, the server runs in open mode (useful for local development). Always set this in production.
+
+Generate a strong key:
+```bash
+openssl rand -hex 32
+```
+
+**curl example:**
+```bash
+curl -X POST http://localhost:3000/mcp \
+  -H "Authorization: Bearer your-secret-key" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "health_check",
+      "arguments": { "url": "https://api.openai.com/v1/models" }
+    }
+  }'
+```
 
 ---
 
 ## Tool Reference
+
 
 ### `health_check`
 
@@ -614,9 +653,21 @@ AI Agent
 └─────────────────────────────────┘
 ```
 
-**Stateless HTTP transport** — no in-memory session state. `storage.ts` is the single swap point for Redis/Cloudflare KV on multi-node deployments.
+**Stateless at the MCP transport layer. Application state (circuits, baselines, checkpoints) is stored in local SQLite and JSONL. Single-instance deployments only unless migrated to an external database.**
 
-**Security:** `health_check` enforces an SSRF blocklist (http/https only, no private IPs). All endpoints are rate-limited.
+**Security:** `health_check` enforces an SSRF blocklist (http/https only, major IPv4 and IPv6 private, reserved, and metadata ranges). All endpoints are rate-limited.
+
+---
+
+## Known Limitations
+
+**Single-instance storage:** AgentGuard uses local SQLite and JSONL files. Circuit breaker state, learned baselines, and session checkpoints are not shared across multiple server instances. For multi-instance deployments, a PostgreSQL backend is required (planned for v3.0.0).
+
+**SSRF protection:** AgentGuard blocks major private IPv4 and IPv6 ranges. For adversarial environments, additional DNS resolution validation and network-layer controls are recommended.
+
+**No tenant isolation:** Circuit breaker keys are global by default. In multi-tenant scenarios, namespace your tool_name values: "tenant/environment/tool_name".
+
+**Dependency tracing vs causation:** analyze_causality traces declared parent_checkpoint_id relationships. It identifies structural dependency ancestors — not proven real-world causation.
 
 ---
 

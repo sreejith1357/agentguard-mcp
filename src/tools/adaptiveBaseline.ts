@@ -39,7 +39,9 @@ export function adaptiveBaselineTools(server: McpServer): void {
             description:
                 "Record a real observed metric value so AgentGuard can learn what normal looks like over time. " +
                 "After 20+ observations the baseline becomes statistically meaningful. " +
-                "detect_anomaly will automatically use learned baselines — no manual baseline needed.",
+                "detect_anomaly will automatically use learned baselines — no manual baseline needed. " +
+                "confidence_percent represents learning progress: min(observation_count / window_size, 1.0) × 100. " +
+                "At 100% the baseline has reached the configured learning threshold. This is not a statistical confidence interval.",
             inputSchema: {
                 metric_name: z
                     .string()
@@ -148,7 +150,9 @@ export function adaptiveBaselineTools(server: McpServer): void {
         {
             description:
                 "Retrieve what AgentGuard has learned about a metric from past observations. " +
-                "Check this before manually providing baselines to detect_anomaly — if a learned baseline exists, detect_anomaly uses it automatically.",
+                "Check this before manually providing baselines to detect_anomaly — if a learned baseline exists, detect_anomaly uses it automatically. " +
+                "confidence_percent represents learning progress: min(observation_count / window_size, 1.0) × 100. " +
+                "At 100% the baseline has reached the configured learning threshold. This is not a statistical confidence interval.",
             inputSchema: {
                 metric_name: z
                     .string()
@@ -203,6 +207,7 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     variance: Number(variance.toFixed(6)),
                     observation_count: total_count,
                     confidence_percent,
+                    confidence_formula: "min(observation_count / window_size, 1.0) × 100",
                     learning_status,
                     first_observed_at: baseline.first_observed_at,
                     last_observed_at: baseline.last_observed_at,
