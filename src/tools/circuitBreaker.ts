@@ -114,7 +114,7 @@ export function circuitBreakerTools(server: McpServer): void {
                         if (currentState === "CLOSED") {
                             failure_count = 0;
                         }
-                        action_taken = "recorded_success";
+                        action_taken = currentState === "OPEN" ? "recorded_success_ignored" : "recorded_success";
                     }
                 } else {
                     // Failure path
