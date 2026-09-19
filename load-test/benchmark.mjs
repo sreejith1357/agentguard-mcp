@@ -88,7 +88,7 @@ function printResult(result) {
   console.log(`Duration: ${result.duration}s`);
   console.log(`Requests/sec: ${result.requests.mean.toFixed(0)}`);
   console.log(`Latency p50: ${result.latency.p50}ms`);
-  console.log(`Latency p95: ${result.latency.p95}ms`);
+  console.log(`Latency p95: ${result.latency.p97_5 ?? result.latency.p95 ?? 'n/a'}ms`);
   console.log(`Latency p99: ${result.latency.p99}ms`);
   console.log(`Errors: ${result.errors}`);
   console.log(`Timeouts: ${result.timeouts}`);
