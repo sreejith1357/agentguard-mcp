@@ -5,41 +5,45 @@ FROM node:24-alpine AS builder
 
 WORKDIR /app
 
-# Copy manifests first so layer is cached when only source changes
+# Install C++ compilation tools required by better-sqlite3 (node-gyp)
+RUN apk add --no-cache python3 make g++
+
+# Copy manifests first for optimal layer caching
 COPY package*.json ./
 
-# Install all deps (including devDeps — tsc is a devDep)
+# Install all dependencies and build native C++ bindings
 RUN npm ci
 
-# Copy source and compile
+# Copy TypeScript config and source code
 COPY tsconfig.json ./
 COPY src/ ./src/
 
+# Compile TypeScript → dist/
 RUN npm run build
 
+# Remove devDependencies leaving only production node_modules
+RUN npm prune --omit=dev
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Stage 2: Runtime (lean image — no devDeps, no source, no tsc)
+# Stage 2: Runtime (lean production image)
 # ─────────────────────────────────────────────────────────────────────────────
 FROM node:24-alpine AS runtime
 
-# Set NODE_ENV so express and rate-limit use production optimisations
 ENV NODE_ENV=production
-
 WORKDIR /app
 
-# Copy manifests and install production deps only
+# Copy production node_modules (with compiled better-sqlite3 bindings) and dist
 COPY package*.json ./
-RUN npm ci --omit=dev
-
-# Copy compiled output from builder stage
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 
-# Create the data directory (session JSONL files land here at runtime).
-# On Railway / Render mount a volume to /app/data for persistence across deploys.
+# Create data directory for session checkpoint files
 RUN mkdir -p data
 
 # Non-root user for security
 RUN addgroup -S agentguard && adduser -S agentguard -G agentguard
+RUN chown -R agentguard:agentguard /app
+
 USER agentguard
 
 EXPOSE 3000
