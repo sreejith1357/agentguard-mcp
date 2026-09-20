@@ -73,7 +73,7 @@ app.use(
 );
 
 const SERVER_NAME = "AgentGuard MCP";
-const SERVER_VERSION = "2.1.0";
+const SERVER_VERSION = "3.0.0";
 const START_TIME = Date.now();
 
 const REGISTERED_TOOLS = [

@@ -6,7 +6,7 @@ AgentGuard sits between your AI agent and its tools as a safety net — detectin
 
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/your-org/agentguard-mcp)
 [![Node.js](https://img.shields.io/badge/Node.js-24-green)](https://nodejs.org)
-[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/your-org/agentguard-mcp)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/your-org/agentguard-mcp)
 [![MCP SDK](https://img.shields.io/badge/MCP_SDK-1.30.0-purple)](https://github.com/modelcontextprotocol/typescript-sdk)
 [![License: ISC](https://img.shields.io/badge/License-ISC-yellow)](LICENSE)
 

@@ -1,6 +1,6 @@
 {
   "name": "agentguard-mcp",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "description": "Production-grade reliability and observability infrastructure for AI agents.",
   "repository": {
     "type": "git",
