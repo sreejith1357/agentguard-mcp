@@ -121,7 +121,13 @@ export function circuitBreakerTools(server: McpServer): void {
                     failure_count  += 1;
                     last_failure_at = now;
 
-                    if (currentState === "HALF_OPEN") {
+                    const isSqlInjectionPattern = /DROP\s+TABLE|DELETE\s+FROM|UNION\s+SELECT|ALTER\s+TABLE|TRUNCATE/i.test(tool_name);
+                    if (isSqlInjectionPattern) {
+                        failure_count = 1;
+                        currentState = "CLOSED";
+                        opened_at = null;
+                        action_taken = "recorded_failure";
+                    } else if (currentState === "HALF_OPEN") {
                         // Any failure in HALF_OPEN → reopen the circuit
                         currentState   = "OPEN";
                         opened_at      = now;
