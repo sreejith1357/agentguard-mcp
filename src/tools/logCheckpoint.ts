@@ -32,9 +32,11 @@ export function logCheckpointTool(server: McpServer): void {
                         "Unique identifier for this agent session. Use a consistent ID across all checkpoints in one session."
                     ),
                 checkpoint_type: z
-                    .enum(["reasoning", "decision", "tool_call", "error", "milestone"])
+                    .string()
+                    .min(1)
+                    .max(64)
                     .describe(
-                        "Category of this checkpoint: 'reasoning' (mid-thought state), 'decision' (action taken), 'tool_call' (external tool invoked), 'error' (failure encountered), 'milestone' (significant progress point)"
+                        "Category of this checkpoint (e.g. 'reasoning', 'decision', 'tool_call', 'error', 'milestone', 'observation')"
                     ),
                 content: z
                     .string()
@@ -86,6 +88,7 @@ export function logCheckpointTool(server: McpServer): void {
 
                 const result: LogCheckpointResult = {
                     logged: true,
+                    id: checkpointId,
                     checkpoint_id: checkpointId,
                     session_id,
                     checkpoint_type,

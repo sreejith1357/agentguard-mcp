@@ -34,6 +34,18 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     const requestId = (req.headers["x-request-id"] as string) || randomUUID();
     req.headers["x-request-id"] = requestId;
     res.setHeader("X-Request-ID", requestId);
+
+    // Enforce UTF-8 charset on Content-Type headers so HTTP clients (e.g. Python requests) decode emojis cleanly
+    const originalSetHeader = res.setHeader.bind(res);
+    res.setHeader = function (name: string, value: any) {
+        if (typeof name === "string" && name.toLowerCase() === "content-type") {
+            if (typeof value === "string" && !value.toLowerCase().includes("charset")) {
+                value = `${value}; charset=utf-8`;
+            }
+        }
+        return originalSetHeader(name, value);
+    };
+
     next();
 });
 
@@ -130,10 +142,7 @@ app.use("/mcp", (req: Request, res: Response, next: NextFunction) => {
             return;
         }
         if (result.identity) {
-            tenantContextStorage.run(result.identity, () => {
-                next();
-            });
-            return;
+            (req as any).tenantIdentity = result.identity;
         }
     }
     next();
@@ -145,13 +154,22 @@ app.use("/mcp", (req: Request, res: Response, next: NextFunction) => {
 
 app.post("/mcp", async (req: Request, res: Response) => {
     try {
-        const transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: undefined, // stateless mode — no in-memory session state
-        });
+        const identity = (req as any).tenantIdentity;
+        const handleMcpRequest = async () => {
+            const transport = new StreamableHTTPServerTransport({
+                sessionIdGenerator: undefined, // stateless mode — no in-memory session state
+            });
 
-        res.on("close", () => transport.close());
-        await server.connect(transport);
-        await transport.handleRequest(req, res, req.body);
+            res.on("close", () => transport.close());
+            await server.connect(transport);
+            await transport.handleRequest(req, res, req.body);
+        };
+
+        if (identity) {
+            await tenantContextStorage.run(identity, handleMcpRequest);
+        } else {
+            await handleMcpRequest();
+        }
     } catch (error) {
         console.error("[AgentGuard] MCP request error:", error);
         res.status(500).json({

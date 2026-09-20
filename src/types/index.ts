@@ -56,7 +56,9 @@ export type CheckpointType =
     | "decision"
     | "tool_call"
     | "error"
-    | "milestone";
+    | "milestone"
+    | "observation"
+    | string;
 
 export interface CheckpointEntry {
     id: string;
@@ -72,6 +74,7 @@ export interface CheckpointEntry {
 
 export interface LogCheckpointResult {
     logged: boolean;
+    id?: string;
     checkpoint_id: string;
     session_id: string;
     checkpoint_type: CheckpointType;

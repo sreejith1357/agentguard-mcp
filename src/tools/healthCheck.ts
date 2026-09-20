@@ -22,6 +22,8 @@ import {
     executeSSRFRequest,
 } from "../utils/ssrfGuard.js";
 
+import { buildResponse } from "../utils/response.js";
+
 export type { BlockedCategory, SSRFCheckResult };
 export { getSSRFBlockCategory, isPrivateOrReservedIP };
 
@@ -71,10 +73,6 @@ export function healthCheckTool(server: McpServer): void {
             inputSchema: {
                 url: z
                     .string()
-                    .url()
-                    .refine((val) => !val.startsWith("data:"), {
-                        message: "data: URIs are not permitted",
-                    })
                     .describe("The endpoint URL to check"),
                 expected_status: z
                     .number()
@@ -98,47 +96,25 @@ export function healthCheckTool(server: McpServer): void {
             try {
                 parsed = new URL(url);
             } catch {
-                return {
-                    content: [
-                        {
-                            type: "text" as const,
-                            text: JSON.stringify(
-                                {
-                                    healthy: false,
-                                    url,
-                                    error: "INVALID_URL",
-                                    message: "URL could not be parsed",
-                                    verdict: "❌ Invalid URL — do not proceed",
-                                    timestamp: new Date().toISOString(),
-                                },
-                                null,
-                                2
-                            ),
-                        },
-                    ],
-                };
+                return buildResponse({
+                    healthy: false,
+                    url,
+                    error: "INVALID_URL",
+                    message: "URL could not be parsed",
+                    verdict: "❌ Invalid URL — do not proceed",
+                    timestamp: new Date().toISOString(),
+                });
             }
 
             if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) {
-                return {
-                    content: [
-                        {
-                            type: "text" as const,
-                            text: JSON.stringify(
-                                {
-                                    healthy: false,
-                                    url,
-                                    error: "BLOCKED_PROTOCOL",
-                                    message: `Protocol "${parsed.protocol}" is not allowed. Only http: and https: are permitted.`,
-                                    verdict: "❌ Blocked — do not proceed",
-                                    timestamp: new Date().toISOString(),
-                                },
-                                null,
-                                2
-                            ),
-                        },
-                    ],
-                };
+                return buildResponse({
+                    healthy: false,
+                    url,
+                    error: "BLOCKED_PROTOCOL",
+                    message: `Protocol "${parsed.protocol}" is not allowed. Only http: and https: are permitted.`,
+                    verdict: "❌ Blocked — do not proceed",
+                    timestamp: new Date().toISOString(),
+                });
             }
 
             // ------------------------------------------------------------------
@@ -146,26 +122,15 @@ export function healthCheckTool(server: McpServer): void {
             // ------------------------------------------------------------------
             const ssrf = await checkSSRF(parsed.hostname);
             if (ssrf.blocked) {
-                return {
-                    content: [
-                        {
-                            type: "text" as const,
-                            text: JSON.stringify(
-                                {
-                                    healthy: false,
-                                    url,
-                                    error: "BLOCKED_PRIVATE_IP",
-                                    blocked_category: ssrf.category,
-                                    message: ssrf.reason,
-                                    verdict: "❌ Blocked — private/internal addresses are not reachable",
-                                    timestamp: new Date().toISOString(),
-                                },
-                                null,
-                                2
-                            ),
-                        },
-                    ],
-                };
+                return buildResponse({
+                    healthy: false,
+                    url,
+                    error: "BLOCKED_PRIVATE_IP",
+                    blocked_category: ssrf.category,
+                    message: ssrf.reason,
+                    verdict: "❌ Blocked — private/internal addresses are not reachable",
+                    timestamp: new Date().toISOString(),
+                });
             }
 
             // ------------------------------------------------------------------
@@ -180,78 +145,45 @@ export function healthCheckTool(server: McpServer): void {
                 const responseTime = Date.now() - startTime;
                 const isHealthy = response.status === expected_status;
 
-                return {
-                    content: [
-                        {
-                            type: "text" as const,
-                            text: JSON.stringify(
-                                {
-                                    healthy: isHealthy,
-                                    url,
-                                    status_code: response.status,
-                                    expected_status,
-                                    response_time_ms: responseTime,
-                                    redirects_followed: response.redirectsFollowed,
-                                    verdict: isHealthy
-                                        ? `✅ Healthy — responded in ${responseTime}ms`
-                                        : `❌ Got ${response.status}, expected ${expected_status}`,
-                                    timestamp: new Date().toISOString(),
-                                },
-                                null,
-                                2
-                            ),
-                        },
-                    ],
-                };
+                return buildResponse({
+                    healthy: isHealthy,
+                    url,
+                    status_code: response.status,
+                    expected_status,
+                    response_time_ms: responseTime,
+                    redirects_followed: response.redirectsFollowed,
+                    verdict: isHealthy
+                        ? `✅ Healthy — responded in ${responseTime}ms`
+                        : `❌ Got ${response.status}, expected ${expected_status}`,
+                    timestamp: new Date().toISOString(),
+                });
             } catch (error: unknown) {
                 const responseTime = Date.now() - startTime;
 
                 if (error instanceof SSRFBlockError) {
-                    return {
-                        content: [
-                            {
-                                type: "text" as const,
-                                text: JSON.stringify(
-                                    {
-                                        healthy: false,
-                                        url,
-                                        error: "BLOCKED_PRIVATE_IP",
-                                        blocked_category: error.category,
-                                        message: error.message,
-                                        verdict: "❌ Blocked — private/internal addresses are not reachable",
-                                        timestamp: new Date().toISOString(),
-                                    },
-                                    null,
-                                    2
-                                ),
-                            },
-                        ],
-                    };
+                    return buildResponse({
+                        healthy: false,
+                        url,
+                        error: "BLOCKED_PRIVATE_IP",
+                        blocked_category: error.category,
+                        message: error.message,
+                        verdict: "❌ Blocked — private/internal addresses are not reachable",
+                        timestamp: new Date().toISOString(),
+                    });
                 }
 
                 const msg = error instanceof Error ? error.message : String(error);
                 const isTimeout = msg.includes("TIMEOUT");
 
-                return {
-                    content: [
-                        {
-                            type: "text" as const,
-                            text: JSON.stringify(
-                                {
-                                    healthy: false,
-                                    url,
-                                    error: isTimeout ? "TIMEOUT" : "CONNECTION_FAILED",
-                                    message: msg,
-                                    response_time_ms: responseTime,
-                                    verdict: `❌ ${isTimeout ? "Timeout" : "Failed"} — do not proceed`,
-                                    timestamp: new Date().toISOString(),
-                                },
-                                null,
-                                2
-                            ),
-                        },
-                    ],
-                };
+                return buildResponse({
+                    healthy: false,
+                    url,
+                    error: isTimeout ? "TIMEOUT" : "CONNECTION_FAILED",
+                    message: msg,
+                    response_time_ms: responseTime,
+                    verdict: `❌ ${isTimeout ? "Timeout" : "Failed"} — do not proceed`,
+                    timestamp: new Date().toISOString(),
+                });
             }
         }
     );

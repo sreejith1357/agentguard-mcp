@@ -27,7 +27,7 @@ import {
 import type { BaselineStatus } from "../types/index.js";
 
 const OUTLIER_SIGMA_FACTOR = 4.0;
-const MIN_ACTIVE_SAMPLES = 20;
+const MIN_ACTIVE_SAMPLES = 50;
 const MAX_SAFE_VALUE = 1e15;
 
 const safeNumericSchema = z
@@ -101,11 +101,12 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     const oldMean = existing.ema_mean;
                     const oldVariance = existing.ema_variance;
                     const oldStdDev = Math.sqrt(oldVariance);
+                    const effectiveStdDev = oldStdDev > 0 ? oldStdDev : Math.max(0.05 * Math.abs(oldMean), 1.0);
 
-                    // Outlier dampening (Winsorization): clamp value if > 4 standard deviations AND > minimum threshold delta
-                    if (existing.observation_count >= 3 && oldStdDev > 0) {
+                    // Outlier dampening (Winsorization): clamp value if > 4 standard deviations
+                    if (existing.observation_count >= 3) {
                         const diff = value - oldMean;
-                        const thresholdDelta = Math.max(OUTLIER_SIGMA_FACTOR * oldStdDev, 5.0);
+                        const thresholdDelta = OUTLIER_SIGMA_FACTOR * effectiveStdDev;
                         if (Math.abs(diff) > thresholdDelta) {
                             is_winsorized = true;
                             effective_value =
@@ -163,6 +164,7 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     current_stddev: Number(current_stddev.toFixed(4)),
                     confidence_percent,
                     status,
+                    learning_status: status,
                     message,
                     ...(context && { context }),
                     timestamp: now,
@@ -200,7 +202,7 @@ export function adaptiveBaselineTools(server: McpServer): void {
             try {
                 const baseline = getBaseline(metric_name);
 
-                if (!baseline) {
+                if (!baseline || baseline.observation_count === 0) {
                     return buildResponse({
                         error: "NO_BASELINE_FOUND",
                         metric_name,
@@ -236,6 +238,7 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     variance: Number(variance.toFixed(6)),
                     observation_count: total_count,
                     status,
+                    learning_status: status,
                     winsorized_count: baseline.winsorized_count ?? 0,
                     confidence_percent,
                     active_threshold_samples: MIN_ACTIVE_SAMPLES,
@@ -280,7 +283,7 @@ export function adaptiveBaselineTools(server: McpServer): void {
                 hard_delete: z
                     .boolean()
                     .optional()
-                    .default(false)
+                    .default(true)
                     .describe(
                         "When true, permanently deletes the baseline record and observation history. When false, resets statistics to 0 and returns to learning status."
                     ),
@@ -305,15 +308,16 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     });
                 }
 
-                resetBaseline(metric_name, hard_delete ?? false);
+                const shouldDelete = hard_delete ?? true;
+                resetBaseline(metric_name, shouldDelete);
 
                 return buildResponse({
                     metric_name,
                     reset: true,
-                    hard_delete: hard_delete ?? false,
-                    status: hard_delete ? "deleted" : "learning",
+                    hard_delete: shouldDelete,
+                    status: shouldDelete ? "deleted" : "learning",
                     ...(reason !== undefined && { reason }),
-                    message: hard_delete
+                    message: shouldDelete
                         ? `Permanently deleted baseline and observation history for "${metric_name}".`
                         : `Reset baseline for "${metric_name}" back to learning status.`,
                     timestamp: now,

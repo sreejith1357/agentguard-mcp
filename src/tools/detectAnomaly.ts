@@ -382,13 +382,13 @@ export function detectAnomalyTool(server: McpServer): void {
                 const learnedRow = getBaseline(metric_name);
                 const isBaselineActive =
                     learnedRow !== undefined &&
-                    (learnedRow.status === "active" || learnedRow.observation_count >= 20);
+                    (learnedRow.status === "active" || learnedRow.observation_count >= 10);
 
                 const confidencePercent = learnedRow
                     ? Number(
                           (
                               Math.min(
-                                  learnedRow.observation_count / 20,
+                                  learnedRow.observation_count / 50,
                                   1.0
                               ) * 100
                           ).toFixed(2)
@@ -401,7 +401,8 @@ export function detectAnomalyTool(server: McpServer): void {
                     typeof value === "number"
                 ) {
                     const avg = learnedRow.ema_mean;
-                    const sd = Math.sqrt(learnedRow.ema_variance);
+                    const rawSd = Math.sqrt(learnedRow.ema_variance);
+                    const sd = Math.max(rawSd, 0.05 * Math.abs(avg), 1.0);
                     const threshold = Z_SCORE_THRESHOLDS[sens];
 
                     let zScore: number;
