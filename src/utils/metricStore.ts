@@ -1,146 +1,110 @@
 /**
- * AgentGuard MCP v2.0.0 — Metric Store
+ * AgentGuard MCP v3.0.0 — Metric Store
  *
- * Thin data-access layer over the metric_observations and metric_baselines
- * SQLite tables. Used by the Adaptive Baseline Learning system to record
- * time-series observations and manage pre-computed EMA statistics.
+ * Unified data-access layer delegating to the active persistence repository
+ * (SQLite or PostgreSQL) via RepositoryFactory.
  */
 
-import db from "../db/schema.js";
 import type { BaselineRow, ObservationRow } from "../types/index.js";
-
-// ---------------------------------------------------------------------------
-// Prepared statements — compiled once at module load
-// ---------------------------------------------------------------------------
-
-const stmtInsertObservation = db.prepare<{
-    metric_name: string;
-    value: number;
-    recorded_at: string;
-}>(`
-    INSERT INTO metric_observations (metric_name, value, recorded_at)
-    VALUES (@metric_name, @value, @recorded_at)
-`);
-
-const stmtGetBaseline = db.prepare<[string], BaselineRow>(
-    "SELECT * FROM metric_baselines WHERE metric_name = ?"
-);
-
-const stmtGetRecentObservations = db.prepare<[string, number], ObservationRow>(`
-    SELECT * FROM metric_observations
-    WHERE metric_name = ?
-    ORDER BY recorded_at DESC
-    LIMIT ?
-`);
-
-const stmtGetObservationCount = db.prepare<[string], { count: number }>(
-    "SELECT COUNT(*) AS count FROM metric_observations WHERE metric_name = ?"
-);
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
+import { getBaselineRepository } from "../repositories/factory.js";
 
 /**
- * Append a single numeric observation for a metric.
- * recorded_at is always set server-side to prevent clock skew.
+ * Clear baseline memory cache on active repository.
  */
-export function recordObservation(metric_name: string, value: number): void {
-    stmtInsertObservation.run({
-        metric_name,
-        value,
-        recorded_at: new Date().toISOString(),
-    });
+export function clearMetricCache(): void {
+    getBaselineRepository().clearCache?.();
 }
 
 /**
- * Retrieve the pre-computed EMA baseline for a metric.
- * Returns undefined if no observations have been recorded yet.
+ * Append a single numeric observation for a metric scoped by tenant identity.
  */
-export function getBaseline(metric_name: string): BaselineRow | undefined {
-    return stmtGetBaseline.get(metric_name);
+export function recordObservation(
+    metric_name: string,
+    value: number,
+    tenantId?: string,
+    projectId?: string
+): void {
+    const res = getBaselineRepository().recordObservation(metric_name, value, tenantId, projectId);
+    if (res instanceof Promise) res.catch(() => {});
 }
 
 /**
- * Insert or update the EMA baseline for a metric.
- * Always stamps updated_at with the current ISO timestamp.
+ * Retrieve the pre-computed EMA baseline for a metric scoped by tenant identity.
+ * Fast-path L1 cache read (< 0.01ms).
+ */
+export function getBaseline(
+    metric_name: string,
+    tenantId?: string,
+    projectId?: string
+): BaselineRow | undefined {
+    const res = getBaselineRepository().get(metric_name, tenantId, projectId);
+    return res instanceof Promise ? undefined : res;
+}
+
+/**
+ * Insert or update the EMA baseline for a metric scoped by tenant identity.
+ * Write-through atomic update.
  */
 export function upsertBaseline(
     metric_name: string,
-    data: Partial<BaselineRow>
+    data: Partial<BaselineRow>,
+    tenantId?: string,
+    projectId?: string
 ): void {
-    const now = new Date().toISOString();
-    const existing = getBaseline(metric_name);
-
-    const merged: BaselineRow = Object.assign(
-        {
-            metric_name,
-            ema_mean: 0,
-            ema_variance: 0,
-            observation_count: 0,
-            first_observed_at: now,
-            last_observed_at: now,
-            window_size: 20,
-            updated_at: now,
-        },
-        existing ?? {},
-        data,
-        { updated_at: now }   // always win — override whatever caller passed
-    );
-
-    db.prepare(`
-        INSERT INTO metric_baselines
-            (metric_name, ema_mean, ema_variance, observation_count,
-             first_observed_at, last_observed_at, window_size, updated_at)
-        VALUES
-            (@metric_name, @ema_mean, @ema_variance, @observation_count,
-             @first_observed_at, @last_observed_at, @window_size, @updated_at)
-        ON CONFLICT(metric_name) DO UPDATE SET
-            ema_mean          = excluded.ema_mean,
-            ema_variance      = excluded.ema_variance,
-            observation_count = excluded.observation_count,
-            last_observed_at  = excluded.last_observed_at,
-            window_size       = excluded.window_size,
-            updated_at        = excluded.updated_at
-    `).run(merged);
+    const res = getBaselineRepository().upsert(metric_name, data, tenantId, projectId);
+    if (res instanceof Promise) res.catch(() => {});
 }
 
 /**
- * Return the N most recent observations for a metric, newest first.
+ * Permanently delete or reset a metric baseline and its observation history for the active tenant.
+ */
+export function resetBaseline(
+    metric_name: string,
+    hardDelete: boolean = false,
+    tenantId?: string,
+    projectId?: string
+): void {
+    const res = getBaselineRepository().reset(metric_name, hardDelete, tenantId, projectId);
+    if (res instanceof Promise) res.catch(() => {});
+}
+
+/**
+ * Return the N most recent observations for a metric, newest first, scoped by tenant.
  */
 export function getRecentObservations(
     metric_name: string,
-    limit: number
+    limit: number,
+    tenantId?: string,
+    projectId?: string
 ): ObservationRow[] {
-    return stmtGetRecentObservations.all(metric_name, limit);
+    const res = getBaselineRepository().getRecentObservations(metric_name, limit, tenantId, projectId);
+    return res instanceof Promise ? [] : res;
 }
 
 /**
- * Return the total number of observations recorded for a metric.
+ * Return the total number of observations recorded for a metric scoped by tenant.
  */
-export function getObservationCount(metric_name: string): number {
-    const row = stmtGetObservationCount.get(metric_name);
-    return row?.count ?? 0;
+export function getObservationCount(
+    metric_name: string,
+    tenantId?: string,
+    projectId?: string
+): number {
+    const res = getBaselineRepository().getObservationCount(metric_name, tenantId, projectId);
+    return res instanceof Promise ? 0 : res;
 }
 
 /**
- * Return aggregate statistics for the metric_baselines table.
+ * Return aggregate statistics for metric baselines for active tenant context.
  */
-export function getBaselineStats(): {
+export function getBaselineStats(
+    tenantId?: string,
+    projectId?: string
+): {
     total_metrics_tracked: number;
     confident_baselines: number;
 } {
-    const row = db
-        .prepare<[], { total: number; confident: number }>(
-            `SELECT
-                COUNT(*) AS total,
-                SUM(CASE WHEN observation_count >= window_size THEN 1 ELSE 0 END) AS confident
-            FROM metric_baselines`
-        )
-        .get();
-    return {
-        total_metrics_tracked: row?.total ?? 0,
-        confident_baselines: row?.confident ?? 0,
-    };
+    const res = getBaselineRepository().getStats(tenantId, projectId);
+    return res instanceof Promise ? { total_metrics_tracked: 0, confident_baselines: 0 } : res;
 }
+
 

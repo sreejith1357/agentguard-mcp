@@ -20,9 +20,25 @@ import {
     recordObservation,
     getBaseline,
     upsertBaseline,
+    resetBaseline,
     getRecentObservations,
     getObservationCount,
 } from "../utils/metricStore.js";
+import type { BaselineStatus } from "../types/index.js";
+
+const OUTLIER_SIGMA_FACTOR = 4.0;
+const MIN_ACTIVE_SAMPLES = 20;
+const MAX_SAFE_VALUE = 1e15;
+
+const safeNumericSchema = z
+    .number()
+    .finite()
+    .refine(
+        (val) => !isNaN(val) && isFinite(val) && Math.abs(val) <= MAX_SAFE_VALUE,
+        {
+            message: `Value must be a finite double-precision number within range [-${MAX_SAFE_VALUE}, ${MAX_SAFE_VALUE}]`,
+        }
+    );
 
 // ---------------------------------------------------------------------------
 // Tool registration
@@ -37,23 +53,18 @@ export function adaptiveBaselineTools(server: McpServer): void {
         "record_observation",
         {
             description:
-                "Record a real observed metric value so AgentGuard can learn what normal looks like over time. " +
-                "After 20+ observations the baseline becomes statistically meaningful. " +
-                "detect_anomaly will automatically use learned baselines — no manual baseline needed. " +
-                "confidence_percent represents learning progress: min(observation_count / window_size, 1.0) × 100. " +
-                "At 100% the baseline has reached the configured learning threshold. This is not a statistical confidence interval.",
+                "Record a real observed metric value so AgentGuard can learn normal baseline behavior over time. " +
+                "Includes Winsorization outlier dampening (>4σ clamped) and a shadow mode lifecycle. " +
+                "Reaches 'active' status after 20+ observations. In active status, detect_anomaly uses it automatically.",
             inputSchema: {
                 metric_name: z
                     .string()
                     .min(1)
                     .max(128)
                     .describe(
-                        "Unique name for this metric. Use consistent naming: tool_name.metric e.g. weather_api.response_time_ms"
+                        "Unique name for this metric (e.g. weather_api.response_time_ms)"
                     ),
-                value: z
-                    .number()
-                    .finite()
-                    .describe("The observed numeric value to record"),
+                value: safeNumericSchema.describe("The observed numeric value to record"),
                 context: z
                     .string()
                     .max(300)
@@ -75,6 +86,9 @@ export function adaptiveBaselineTools(server: McpServer): void {
                 let ema_variance: number;
                 let observation_count: number;
                 let first_observed_at: string;
+                let winsorized_count = existing?.winsorized_count ?? 0;
+                let is_winsorized = false;
+                let effective_value = value;
                 const now = new Date().toISOString();
 
                 if (!existing || existing.observation_count === 0) {
@@ -84,23 +98,42 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     observation_count = 1;
                     first_observed_at = now;
                 } else {
-                    // Update existing EMA and Variance using online formula
                     const oldMean = existing.ema_mean;
                     const oldVariance = existing.ema_variance;
+                    const oldStdDev = Math.sqrt(oldVariance);
 
-                    ema_mean = alpha * value + (1 - alpha) * oldMean;
+                    // Outlier dampening (Winsorization): clamp value if > 4 standard deviations AND > minimum threshold delta
+                    if (existing.observation_count >= 3 && oldStdDev > 0) {
+                        const diff = value - oldMean;
+                        const thresholdDelta = Math.max(OUTLIER_SIGMA_FACTOR * oldStdDev, 5.0);
+                        if (Math.abs(diff) > thresholdDelta) {
+                            is_winsorized = true;
+                            effective_value =
+                                oldMean + (diff > 0 ? 1 : -1) * thresholdDelta;
+                            winsorized_count += 1;
+                        }
+                    }
+
+                    // Update existing EMA and Variance using effective (dampened) value
+                    ema_mean = alpha * effective_value + (1 - alpha) * oldMean;
                     ema_variance =
-                        alpha * Math.pow(value - oldMean, 2) +
+                        alpha * Math.pow(effective_value - oldMean, 2) +
                         (1 - alpha) * oldVariance;
                     observation_count = existing.observation_count + 1;
                     first_observed_at = existing.first_observed_at;
                 }
+
+                // Determine baseline status lifecycle: 'learning' -> 'active' (>= 50 samples)
+                const status: BaselineStatus =
+                    observation_count >= MIN_ACTIVE_SAMPLES ? "active" : "learning";
 
                 // 3. Persist updated baseline statistics to SQLite
                 upsertBaseline(metric_name, {
                     ema_mean,
                     ema_variance,
                     observation_count,
+                    status,
+                    winsorized_count,
                     first_observed_at,
                     last_observed_at: now,
                     window_size,
@@ -109,28 +142,27 @@ export function adaptiveBaselineTools(server: McpServer): void {
                 // 4. Calculate response metrics
                 const current_stddev = Math.sqrt(ema_variance);
                 const confidence_percent = Number(
-                    (Math.min(observation_count / window_size, 1.0) * 100).toFixed(
-                        2
-                    )
+                    (Math.min(observation_count / MIN_ACTIVE_SAMPLES, 1.0) * 100).toFixed(2)
                 );
-                const learning_status =
-                    observation_count < window_size ? "learning" : "confident";
 
                 const message =
-                    observation_count < window_size
-                        ? `Recorded observation ${observation_count}/${window_size}. Need ${
-                              window_size - observation_count
-                          } more for confident baseline.`
-                        : `Baseline is confident after ${observation_count} observations.`;
+                    status === "learning"
+                        ? `Recorded observation ${observation_count}/${MIN_ACTIVE_SAMPLES} (shadow mode). Need ${
+                              MIN_ACTIVE_SAMPLES - observation_count
+                          } more for active status.`
+                        : `Baseline is active after ${observation_count} observations.`;
 
                 return buildResponse({
                     metric_name,
                     value_recorded: value,
+                    effective_value_used: effective_value,
+                    is_winsorized,
+                    winsorized_count,
                     observation_count,
-                    current_mean: Number(ema_mean.toFixed(2)),
-                    current_stddev: Number(current_stddev.toFixed(2)),
+                    current_mean: Number(ema_mean.toFixed(4)),
+                    current_stddev: Number(current_stddev.toFixed(4)),
                     confidence_percent,
-                    learning_status,
+                    status,
                     message,
                     ...(context && { context }),
                     timestamp: now,
@@ -149,10 +181,8 @@ export function adaptiveBaselineTools(server: McpServer): void {
         "get_learned_baseline",
         {
             description:
-                "Retrieve what AgentGuard has learned about a metric from past observations. " +
-                "Check this before manually providing baselines to detect_anomaly — if a learned baseline exists, detect_anomaly uses it automatically. " +
-                "confidence_percent represents learning progress: min(observation_count / window_size, 1.0) × 100. " +
-                "At 100% the baseline has reached the configured learning threshold. This is not a statistical confidence interval.",
+                "Retrieve learned baseline statistics and status for a metric. " +
+                "Includes shadow mode status ('learning' | 'active' | 'degraded') and winsorization statistics.",
             inputSchema: {
                 metric_name: z
                     .string()
@@ -174,7 +204,7 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     return buildResponse({
                         error: "NO_BASELINE_FOUND",
                         metric_name,
-                        message: `No learned baseline found for metric "${metric_name}". Use record_observation first to begin learning normal baseline values.`,
+                        message: `No learned baseline found for metric "${metric_name}". Use record_observation first to begin learning.`,
                         hint: "Call record_observation with observed numeric values to build a baseline.",
                         timestamp: new Date().toISOString(),
                     });
@@ -187,10 +217,9 @@ export function adaptiveBaselineTools(server: McpServer): void {
                 const window_size = baseline.window_size || 20;
 
                 const confidence_percent = Number(
-                    (Math.min(total_count / window_size, 1.0) * 100).toFixed(2)
+                    (Math.min(total_count / MIN_ACTIVE_SAMPLES, 1.0) * 100).toFixed(2)
                 );
-                const learning_status =
-                    total_count < window_size ? "learning" : "confident";
+                const status: BaselineStatus = baseline.status ?? (total_count >= MIN_ACTIVE_SAMPLES ? "active" : "learning");
 
                 const recent_observations = include_recent_observations
                     ? getRecentObservations(metric_name, 10).map((obs) => ({
@@ -206,9 +235,10 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     stddev: Number(stddev.toFixed(4)),
                     variance: Number(variance.toFixed(6)),
                     observation_count: total_count,
+                    status,
+                    winsorized_count: baseline.winsorized_count ?? 0,
                     confidence_percent,
-                    confidence_formula: "min(observation_count / window_size, 1.0) × 100",
-                    learning_status,
+                    active_threshold_samples: MIN_ACTIVE_SAMPLES,
                     first_observed_at: baseline.first_observed_at,
                     last_observed_at: baseline.last_observed_at,
                     window_size,
@@ -227,6 +257,69 @@ export function adaptiveBaselineTools(server: McpServer): void {
                 });
             } catch (error) {
                 return buildErrorResponse("get_learned_baseline", error);
+            }
+        }
+    );
+
+    // -----------------------------------------------------------------------
+    // TOOL 3: reset_baseline
+    // -----------------------------------------------------------------------
+
+    server.registerTool(
+        "reset_baseline",
+        {
+            description:
+                "Administrative tool to wipe poisoned metric data or reset a learned baseline. " +
+                "Allows tenant administrators to clear poisoned metrics and restore baseline to learning state.",
+            inputSchema: {
+                metric_name: z
+                    .string()
+                    .min(1)
+                    .max(128)
+                    .describe("The metric key to reset or delete"),
+                hard_delete: z
+                    .boolean()
+                    .optional()
+                    .default(false)
+                    .describe(
+                        "When true, permanently deletes the baseline record and observation history. When false, resets statistics to 0 and returns to learning status."
+                    ),
+                reason: z
+                    .string()
+                    .max(500)
+                    .optional()
+                    .describe("Optional audit reason for resetting the baseline"),
+            },
+        },
+        async ({ metric_name, hard_delete, reason }) => {
+            try {
+                const now = new Date().toISOString();
+                const existing = getBaseline(metric_name);
+
+                if (!existing) {
+                    return buildResponse({
+                        metric_name,
+                        reset: false,
+                        message: `No baseline found for metric "${metric_name}" — nothing to reset.`,
+                        timestamp: now,
+                    });
+                }
+
+                resetBaseline(metric_name, hard_delete ?? false);
+
+                return buildResponse({
+                    metric_name,
+                    reset: true,
+                    hard_delete: hard_delete ?? false,
+                    status: hard_delete ? "deleted" : "learning",
+                    ...(reason !== undefined && { reason }),
+                    message: hard_delete
+                        ? `Permanently deleted baseline and observation history for "${metric_name}".`
+                        : `Reset baseline for "${metric_name}" back to learning status.`,
+                    timestamp: now,
+                });
+            } catch (error) {
+                return buildErrorResponse("reset_baseline", error);
             }
         }
     );

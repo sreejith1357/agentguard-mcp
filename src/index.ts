@@ -20,7 +20,8 @@ import { getStorageStats } from "./utils/storage.js";
 import { getAllCircuits } from "./utils/circuitStore.js";
 import { getBaselineStats } from "./utils/metricStore.js";
 import { initializeDatabase } from "./db/schema.js";
-import { authenticateRequest } from "./utils/auth.js";
+import { authenticateRequest, tenantContextStorage } from "./utils/auth.js";
+import { runDatabaseMaintenance } from "./utils/maintenance.js";
 
 // ---------------------------------------------------------------------------
 // Server setup
@@ -90,6 +91,7 @@ const REGISTERED_TOOLS = [
     // Adaptive Baseline Learning (v2.0.0)
     "record_observation",
     "get_learned_baseline",
+    "reset_baseline",
 ] as const;
 
 // Create MCP server
@@ -112,7 +114,7 @@ causalChainTools(server);
 adaptiveBaselineTools(server);
 
 // ---------------------------------------------------------------------------
-// Authentication middleware — protects MCP tool calls via Bearer token
+// Authentication middleware — protects MCP tool calls via Bearer token & sets tenant context
 // ---------------------------------------------------------------------------
 
 app.use("/mcp", (req: Request, res: Response, next: NextFunction) => {
@@ -124,6 +126,12 @@ app.use("/mcp", (req: Request, res: Response, next: NextFunction) => {
                 message: result.error,
                 hint: "Set AGENTGUARD_API_KEY environment variable and pass it as: Authorization: Bearer <key>",
                 timestamp: new Date().toISOString(),
+            });
+            return;
+        }
+        if (result.identity) {
+            tenantContextStorage.run(result.identity, () => {
+                next();
             });
             return;
         }
@@ -158,16 +166,27 @@ app.post("/mcp", async (req: Request, res: Response) => {
 // Health endpoint — uptime monitoring for Railway / Cloudflare / k8s probes
 // ---------------------------------------------------------------------------
 
+import { RepositoryFactory } from "./repositories/factory.js";
+
 app.get("/health", async (_req: Request, res: Response) => {
     const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
 
-    // Storage stats — never let a readdir failure break the health probe
+    // Database repository health probe
+    const dbHealth = await RepositoryFactory.getInstance().getDatabaseHealth().catch((err) => ({
+        healthy: false,
+        backend: RepositoryFactory.getInstance().getBackend(),
+        connection_pooled: false,
+        latency_ms: -1,
+        error: String(err),
+    }));
+
+    // Storage stats — never let a failure break the health probe
     const storage = await getStorageStats().catch(() => ({
         total_sessions: -1,
         total_checkpoints: -1,
     }));
 
-    // Circuit breaker stats — synchronous SQLite read, wrapped for safety
+    // Circuit breaker stats — wrapped for safety
     let total_circuits = 0;
     let open_circuits = 0;
     let half_open_circuits = 0;
@@ -195,13 +214,14 @@ app.get("/health", async (_req: Request, res: Response) => {
         node_version: process.version,
         tools_registered: REGISTERED_TOOLS.length,
         tools: REGISTERED_TOOLS,
+        database_health: dbHealth,
         storage: {
             total_sessions: storage.total_sessions,
             total_checkpoints: storage.total_checkpoints,
             checkpoint_limit_per_session: parseInt(process.env.MAX_CHECKPOINTS ?? "10000", 10),
         },
-        storage_mode: "sqlite_single_instance",
-        storage_note: "SQLite and JSONL are local to this instance. Multi-instance deployments require an external database.",
+        storage_mode: dbHealth.backend,
+        storage_note: "Supports runtime backend switching between local SQLite and distributed PostgreSQL.",
         v2_systems: {
             circuit_breaker: {
                 total_circuits,
@@ -239,6 +259,9 @@ app.use((_req: Request, res: Response) => {
 // Ensure SQLite tables exist before the server accepts any traffic
 initializeDatabase();
 console.log("[AgentGuard] SQLite database initialized at agentguard.db");
+runDatabaseMaintenance().catch((err) =>
+    console.error("[AgentGuard] Maintenance error:", err)
+);
 
 const PORT = process.env.PORT || 3000;
 
@@ -255,7 +278,7 @@ const httpServer = app.listen(PORT, () => {
     console.log("└─────────────────────────────────────────┘");
     console.log("");
     console.log(
-        "[AgentGuard] ⚠️  Storage: SQLite + JSONL (single-instance). For multi-instance deployments, migrate to PostgreSQL."
+        "[AgentGuard] ℹ️  Storage: SQLite WAL-mode (unified single-instance)."
     );
 
     if (!process.env.AGENTGUARD_API_KEY) {

@@ -241,6 +241,19 @@ function detectString(
 // Tool registration
 // ---------------------------------------------------------------------------
 
+const MAX_SAFE_VALUE = 1e15;
+
+const safeNumberSchema = z
+    .number()
+    .finite()
+    .refine((val) => !isNaN(val) && isFinite(val) && Math.abs(val) <= MAX_SAFE_VALUE, {
+        message: `Value must be a finite double-precision number within range [-${MAX_SAFE_VALUE}, ${MAX_SAFE_VALUE}]`,
+    });
+
+// ---------------------------------------------------------------------------
+// Tool registration
+// ---------------------------------------------------------------------------
+
 export function detectAnomalyTool(server: McpServer): void {
     server.registerTool(
         "detect_anomaly",
@@ -249,16 +262,16 @@ export function detectAnomalyTool(server: McpServer): void {
                 "Compare an agent output or metric against expected baseline patterns and flag statistical outliers before they propagate downstream. Uses z-score analysis for numeric values and Levenshtein similarity for strings.",
             inputSchema: {
                 value: z
-                    .union([z.number(), z.string()])
+                    .union([safeNumberSchema, z.string()])
                     .describe("The current observed value or agent output to check"),
                 baseline: z
                     .union([
-                        z.array(z.number()).min(1).max(1000),
+                        z.array(safeNumberSchema).min(1).max(1000),
                         z.array(z.string()).min(1).max(1000),
                     ])
                     .optional()
                     .describe(
-                        "Historical or expected comparison set. Must be same type as value (all numbers or all strings). Minimum 1 item, maximum 1000. Optional if a confident learned baseline exists."
+                        "Historical or expected comparison set. Must be same type as value (all numbers or all strings). Minimum 1 item, maximum 1000. Optional if an active learned baseline exists."
                     ),
                 metric_name: z
                     .string()
@@ -364,15 +377,18 @@ export function detectAnomalyTool(server: McpServer): void {
                 }
 
                 // -----------------------------------------------------------
-                // Case 2: No manual baseline — check for learned baseline
+                // Case 2: No manual baseline — check for active learned baseline
                 // -----------------------------------------------------------
                 const learnedRow = getBaseline(metric_name);
-                const windowSize = learnedRow?.window_size ?? 20;
+                const isBaselineActive =
+                    learnedRow !== undefined &&
+                    (learnedRow.status === "active" || learnedRow.observation_count >= 20);
+
                 const confidencePercent = learnedRow
                     ? Number(
                           (
                               Math.min(
-                                  learnedRow.observation_count / windowSize,
+                                  learnedRow.observation_count / 20,
                                   1.0
                               ) * 100
                           ).toFixed(2)
@@ -381,7 +397,7 @@ export function detectAnomalyTool(server: McpServer): void {
 
                 if (
                     learnedRow &&
-                    confidencePercent >= 50 &&
+                    isBaselineActive &&
                     typeof value === "number"
                 ) {
                     const avg = learnedRow.ema_mean;
@@ -442,12 +458,15 @@ export function detectAnomalyTool(server: McpServer): void {
                 }
 
                 // -----------------------------------------------------------
-                // Case 3: Neither manual baseline nor confident learned baseline
+                // Case 3: Neither manual baseline nor active learned baseline
                 // -----------------------------------------------------------
+                const isShadowLearning = learnedRow && !isBaselineActive;
                 return buildResponse({
                     error: "BASELINE_REQUIRED",
                     metric_name,
-                    message: `No manual baseline provided and no confident learned baseline found for metric "${metric_name}". Either provide a manual baseline array or use record_observation to train a baseline.`,
+                    message: isShadowLearning
+                        ? `Learned baseline for "${metric_name}" is in shadow mode (${learnedRow.observation_count}/50 observations collected). Need 50 samples before active enforcement or supply a manual baseline array.`
+                        : `No manual baseline provided and no active learned baseline found for metric "${metric_name}". Either provide a manual baseline array or use record_observation to train a baseline.`,
                     hint: "Use record_observation to record observations over time, or supply a baseline array directly.",
                     timestamp: new Date().toISOString(),
                 });

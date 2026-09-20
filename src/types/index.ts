@@ -155,6 +155,8 @@ export type CircuitState = "CLOSED" | "OPEN" | "HALF_OPEN";
  * null fields map to SQL NULL (e.g. last_failure_at before any failure).
  */
 export interface CircuitRow {
+    tenant_id?: string;
+    project_id?: string;
     name: string;
     state: CircuitState;
     failure_count: number;
@@ -166,12 +168,19 @@ export interface CircuitRow {
     updated_at: string;
 }
 
+/** Status of a learned adaptive baseline */
+export type BaselineStatus = "learning" | "active" | "degraded";
+
 /** A row in the metric_baselines table (one per metric). */
 export interface BaselineRow {
+    tenant_id?: string;
+    project_id?: string;
     metric_name: string;
     ema_mean: number;
     ema_variance: number;
     observation_count: number;
+    status: BaselineStatus;
+    winsorized_count: number;
     first_observed_at: string;
     last_observed_at: string;
     window_size: number;
@@ -181,6 +190,8 @@ export interface BaselineRow {
 /** A row in the metric_observations table (one per data point). */
 export interface ObservationRow {
     id: number;
+    tenant_id?: string;
+    project_id?: string;
     metric_name: string;
     value: number;
     recorded_at: string;

@@ -2,20 +2,14 @@
  * AgentGuard MCP — Tool: get_session_history
  *
  * Retrieves prior reasoning checkpoints logged via log_checkpoint, giving
- * agents persistent memory across sessions with filtering support.
- *
- * Filters are applied in this order for efficiency:
- *  1. Type filter (fastest — enum comparison)
- *  2. Timestamp filter (date comparison)
- *  3. Tags filter (AND logic — all specified tags must be present)
- *  4. Limit (applied last, after all filters)
+ * agents persistent memory across sessions with SQL-indexed filtering support.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildResponse, buildErrorResponse } from "../utils/response.js";
-import { readAll } from "../utils/storage.js";
-import type { CheckpointEntry, SessionHistoryResult } from "../types/index.js";
+import { querySessionHistory } from "../utils/storage.js";
+import type { SessionHistoryResult } from "../types/index.js";
 
 // ---------------------------------------------------------------------------
 // Tool registration
@@ -61,9 +55,8 @@ export function getSessionHistoryTool(server: McpServer): void {
         async ({ session_id, limit, checkpoint_type, since_timestamp, tags }) => {
             try {
                 // Parse since_timestamp upfront to fail fast on bad input
-                let sinceDate: Date | undefined;
                 if (since_timestamp) {
-                    sinceDate = new Date(since_timestamp);
+                    const sinceDate = new Date(since_timestamp);
                     if (isNaN(sinceDate.getTime())) {
                         return buildResponse({
                             error: "INVALID_TIMESTAMP",
@@ -74,40 +67,15 @@ export function getSessionHistoryTool(server: McpServer): void {
                     }
                 }
 
-                // Read all records from disk
-                const allEntries = await readAll<CheckpointEntry>(session_id);
-
-                // Apply filters
-                let filtered = allEntries;
-
-                // 1. Type filter
-                if (checkpoint_type) {
-                    filtered = filtered.filter(
-                        (e) => e.checkpoint_type === checkpoint_type
-                    );
-                }
-
-                // 2. Timestamp filter
-                if (sinceDate) {
-                    filtered = filtered.filter((e) => {
-                        const entryDate = new Date(e.created_at);
-                        return !isNaN(entryDate.getTime()) && entryDate >= sinceDate!;
-                    });
-                }
-
-                // 3. Tags filter (AND logic: entry must have ALL requested tags)
-                if (tags && tags.length > 0) {
-                    filtered = filtered.filter((e) => {
-                        if (!e.tags || e.tags.length === 0) return false;
-                        return tags.every((tag) => e.tags!.includes(tag));
-                    });
-                }
-
-                const totalFound = filtered.length;
-
-                // 4. Limit
+                // Query database with indexed SQL execution
                 const effectiveLimit = limit ?? 50;
-                const paginated = filtered.slice(-effectiveLimit); // Take most recent
+                const { entries: paginated, totalFound } = querySessionHistory({
+                    session_id,
+                    limit: effectiveLimit,
+                    checkpoint_type,
+                    since_timestamp,
+                    tags,
+                });
 
                 // Compute time bounds from paginated results
                 let oldestEntryAt: string | null = null;

@@ -1,23 +1,15 @@
 /**
  * AgentGuard MCP v2.0.0 — Tool: Causal Chain Analysis
  *
- * Reads checkpoint history from JSONL storage and uses Breadth-First Search
- * to trace failure propagation through parent_checkpoint_id dependency links.
- * Identifies the root cause checkpoint and scores confidence based on how many
- * failure chains converge on it.
- *
- * Algorithm overview:
- *   1. Load all checkpoints for the session from JSONL storage
- *   2. Build a directed graph: parent → [children]
- *   3. For each failed checkpoint, walk UP through parent links (BFS)
- *   4. Count how often each ancestor appears across all failure chains
- *   5. The most-common ancestor = root cause; frequency / total = confidence
+ * Reads checkpoint history from SQLite storage and uses SQLite recursive Common Table Expressions (CTEs)
+ * along with BFS graph traversal to trace failure propagation through parent_checkpoint_id dependency links.
+ * Identifies the root cause checkpoint and scores confidence based on how many failure chains converge on it.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildResponse, buildErrorResponse } from "../utils/response.js";
-import { readAll } from "../utils/storage.js";
+import { readAll, countRecords, getLineageForFailures } from "../utils/storage.js";
 import type { CheckpointEntry } from "../types/index.js";
 
 // ---------------------------------------------------------------------------
@@ -26,21 +18,21 @@ import type { CheckpointEntry } from "../types/index.js";
 
 interface GraphNode {
     checkpoint: CheckpointEntry;
-    children:   string[];           // checkpoint IDs whose parent = this node
+    children: string[];           // checkpoint IDs whose parent = this node
 }
 
 type Graph = Map<string, GraphNode>;
 
 // ---------------------------------------------------------------------------
-// Helper: build adjacency list from flat checkpoint array
+// Helper: build adjacency list from checkpoint array
 // ---------------------------------------------------------------------------
 
 function buildGraph(checkpoints: CheckpointEntry[]): {
-    graph:      Graph;
-    rootIds:    Set<string>;   // checkpoints with no parent
+    graph: Graph;
+    rootIds: Set<string>;   // checkpoints with no parent
 } {
-    const graph: Graph    = new Map();
-    const rootIds         = new Set<string>();
+    const graph: Graph = new Map();
+    const rootIds = new Set<string>();
 
     // First pass — create every node
     for (const cp of checkpoints) {
@@ -62,20 +54,17 @@ function buildGraph(checkpoints: CheckpointEntry[]): {
 
 // ---------------------------------------------------------------------------
 // Helper: walk from a given node UP through parent links (BFS)
-// Returns ordered list of ancestor IDs from nearest to root,
-// including the starting node itself.
-// Breaks on cycles by tracking visited nodes.
 // ---------------------------------------------------------------------------
 
 function ancestorChain(
-    startId:       string,
-    graph:         Graph,
-    rootIds:       Set<string>,
-    cyclesFound:   Set<string>
+    startId: string,
+    graph: Graph,
+    rootIds: Set<string>,
+    cyclesFound: Set<string>
 ): string[] {
-    const chain:   string[] = [];
+    const chain: string[] = [];
     const visited: Set<string> = new Set();
-    let current:   string | null = startId;
+    let current: string | null = startId;
 
     while (current !== null) {
         if (visited.has(current)) {
@@ -101,7 +90,6 @@ function ancestorChain(
 // ---------------------------------------------------------------------------
 
 export function causalChainTools(server: McpServer): void {
-
     server.registerTool(
         "analyze_causality",
         {
@@ -134,30 +122,32 @@ export function causalChainTools(server: McpServer): void {
         async ({ session_id, failed_checkpoint_ids, include_graph }) => {
             try {
                 // ---------------------------------------------------------------
-                // Phase 1 — Load session checkpoints
+                // Phase 1 — Check session existence & count
                 // ---------------------------------------------------------------
+                const totalCheckpointsInSession = await countRecords(session_id);
 
-                const allCheckpoints = await readAll<CheckpointEntry>(session_id);
-
-                if (!allCheckpoints || allCheckpoints.length === 0) {
+                if (totalCheckpointsInSession === 0) {
                     return buildResponse({
-                        error:          "SESSION_NOT_FOUND",
+                        error: "SESSION_NOT_FOUND",
                         session_id,
-                        message:        `No checkpoints found for session "${session_id}". ` +
-                                        "Ensure log_checkpoint was called with this session_id.",
-                        timestamp:      new Date().toISOString(),
+                        message: `No checkpoints found for session "${session_id}". ` +
+                            "Ensure log_checkpoint was called with this session_id.",
+                        timestamp: new Date().toISOString(),
                     });
                 }
 
                 // ---------------------------------------------------------------
-                // Phase 2 — Build graph & identify unknown IDs
+                // Phase 2 — Use SQLite Recursive CTE to fetch ancestor lineage
                 // ---------------------------------------------------------------
+                // For graph completeness or full tree inspection, fetch checkpoints
+                const lineageCheckpoints = getLineageForFailures(session_id, failed_checkpoint_ids);
+                const allCheckpoints = include_graph ? await readAll<CheckpointEntry>(session_id) : lineageCheckpoints;
 
                 const checkpointById = new Map<string, CheckpointEntry>(
                     allCheckpoints.map((cp) => [cp.id, cp])
                 );
 
-                const unknownIds:  string[] = [];
+                const unknownIds: string[] = [];
                 const knownFailIds: string[] = [];
 
                 for (const id of failed_checkpoint_ids) {
@@ -169,22 +159,18 @@ export function causalChainTools(server: McpServer): void {
                 }
 
                 const { graph, rootIds } = buildGraph(allCheckpoints);
-                const cyclesFound        = new Set<string>();
+                const cyclesFound = new Set<string>();
 
                 // ---------------------------------------------------------------
                 // Phase 3 — BFS upward from each failed checkpoint
                 // ---------------------------------------------------------------
-
-                // ancestorFrequency: how many failure chains pass through each node
                 const ancestorFrequency = new Map<string, number>();
-                // Per-failure ordered chains (startId → root)
-                const chainsPerFailure  = new Map<string, string[]>();
+                const chainsPerFailure = new Map<string, string[]>();
 
                 for (const failId of knownFailIds) {
                     const chain = ancestorChain(failId, graph, rootIds, cyclesFound);
                     chainsPerFailure.set(failId, chain);
 
-                    // Weight every ancestor in this chain
                     for (const ancestorId of chain) {
                         ancestorFrequency.set(
                             ancestorId,
@@ -196,12 +182,9 @@ export function causalChainTools(server: McpServer): void {
                 // ---------------------------------------------------------------
                 // Phase 4 — Identify root cause candidate & confidence
                 // ---------------------------------------------------------------
+                let rootCauseId: string | null = null;
+                let rootCauseFreq: number = 0;
 
-                let rootCauseId:    string | null = null;
-                let rootCauseFreq:  number        = 0;
-
-                // Prefer candidates that are actual root nodes (no parent);
-                // if none found there, fall back to the most-frequent ancestor overall.
                 for (const [id, freq] of ancestorFrequency) {
                     const isPreferred =
                         rootIds.has(id) || graph.get(id)?.checkpoint.parent_checkpoint_id === null;
@@ -211,20 +194,19 @@ export function causalChainTools(server: McpServer): void {
                         freq > rootCauseFreq ||
                         (freq === rootCauseFreq && isPreferred)
                     ) {
-                        rootCauseId   = id;
+                        rootCauseId = id;
                         rootCauseFreq = freq;
                     }
                 }
 
-                // Edge case: all provided IDs were unknown — no analysis possible
                 if (rootCauseId === null || knownFailIds.length === 0) {
                     return buildResponse({
-                        error:                    "NO_KNOWN_FAILURES",
+                        error: "NO_KNOWN_FAILURES",
                         session_id,
-                        unknown_checkpoint_ids:   unknownIds,
-                        message:                  "None of the provided failed_checkpoint_ids were found in this session.",
-                        total_checkpoints_analyzed: allCheckpoints.length,
-                        timestamp:                new Date().toISOString(),
+                        unknown_checkpoint_ids: unknownIds,
+                        message: "None of the provided failed_checkpoint_ids were found in this session.",
+                        total_checkpoints_analyzed: totalCheckpointsInSession,
+                        timestamp: new Date().toISOString(),
                     });
                 }
 
@@ -236,11 +218,9 @@ export function causalChainTools(server: McpServer): void {
                 // ---------------------------------------------------------------
                 // Phase 5 — Build response
                 // ---------------------------------------------------------------
-
-                // Flatten failure chains: root → failure (reverse each chain)
                 const failureChain: string[] = [];
                 for (const [, chain] of chainsPerFailure) {
-                    const ordered = [...chain].reverse(); // root first
+                    const ordered = [...chain].reverse();
                     for (const id of ordered) {
                         if (!failureChain.includes(id)) {
                             failureChain.push(id);
@@ -248,7 +228,6 @@ export function causalChainTools(server: McpServer): void {
                     }
                 }
 
-                // Determine if root has siblings (multiple disconnected chains)
                 const distinctRoots = new Set<string>();
                 for (const [, chain] of chainsPerFailure) {
                     const rootOfChain = chain[chain.length - 1];
@@ -259,7 +238,6 @@ export function causalChainTools(server: McpServer): void {
                     rootIds.has(rootCauseId) ||
                     !rootCauseCheckpoint.parent_checkpoint_id;
 
-                // Human-readable analysis summary
                 const summaryParts: string[] = [
                     `Root-cause candidate identified: checkpoint "${rootCauseId.slice(0, 8)}…" ` +
                     `(type: ${rootCauseCheckpoint.checkpoint_type}, ` +
@@ -298,7 +276,6 @@ export function causalChainTools(server: McpServer): void {
 
                 const analysisSummary = summaryParts.join(" ");
 
-                // Optionally include the full serialised graph for debugging
                 let graphOutput: Record<string, unknown> | undefined;
                 if (include_graph) {
                     const graphObj: Record<string, unknown> = {};
@@ -316,19 +293,19 @@ export function causalChainTools(server: McpServer): void {
                 return buildResponse({
                     session_id,
                     root_cause_candidate: {
-                        checkpoint_id:   rootCauseCheckpoint.id,
+                        checkpoint_id: rootCauseCheckpoint.id,
                         checkpoint_type: rootCauseCheckpoint.checkpoint_type,
-                        content:         rootCauseCheckpoint.content.slice(0, 200),
-                        created_at:      rootCauseCheckpoint.created_at,
-                        is_root_node:    isRootNode,
+                        content: rootCauseCheckpoint.content.slice(0, 200),
+                        created_at: rootCauseCheckpoint.created_at,
+                        is_root_node: isRootNode,
                     },
-                    confidence_score:             confidenceScore,
-                    failure_chain:                failureChain,
-                    total_checkpoints_analyzed:   allCheckpoints.length,
-                    failed_checkpoints_found:     knownFailIds.length,
-                    unknown_checkpoint_ids:       unknownIds,
-                    analysis_summary:             analysisSummary,
-                    dependency_note:              "This analysis traces declared parent_checkpoint_id relationships. It identifies structural dependency ancestors, not proven real-world causation.",
+                    confidence_score: confidenceScore,
+                    failure_chain: failureChain,
+                    total_checkpoints_analyzed: totalCheckpointsInSession,
+                    failed_checkpoints_found: knownFailIds.length,
+                    unknown_checkpoint_ids: unknownIds,
+                    analysis_summary: analysisSummary,
+                    dependency_note: "This analysis traces declared parent_checkpoint_id relationships. It identifies structural dependency ancestors, not proven real-world causation.",
                     ...(include_graph && graphOutput !== undefined && { graph: graphOutput }),
                     timestamp: new Date().toISOString(),
                 });
