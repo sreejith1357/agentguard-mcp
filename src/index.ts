@@ -160,8 +160,32 @@ app.use("/mcp", (req: Request, res: Response, next: NextFunction) => {
 // MCP endpoint — stateless StreamableHTTP (MCP protocol rev. July 2026)
 // ---------------------------------------------------------------------------
 
+app.get("/mcp", (_req: Request, res: Response) => {
+    res.json({
+        service: SERVER_NAME,
+        version: SERVER_VERSION,
+        protocol: "Model Context Protocol (MCP) StreamableHTTP",
+        message: "The /mcp endpoint accepts POST requests containing JSON-RPC 2.0 tool invocation payloads.",
+        usage: {
+            method: "POST",
+            url: "/mcp",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "Authorization": "Bearer <your-api-key>"
+            }
+        },
+        admin_console: "/admin",
+        health_check: "/health",
+        registered_tools_count: REGISTERED_TOOLS.length,
+        registered_tools: REGISTERED_TOOLS,
+        timestamp: new Date().toISOString(),
+    });
+});
+
 app.post("/mcp", async (req: Request, res: Response) => {
     const startTime = Date.now();
+
     let isSuccess = true;
     let errorCode: string | undefined = undefined;
 
