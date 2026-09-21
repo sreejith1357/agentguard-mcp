@@ -1,168 +1,268 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AgentGuard MCP — Admin Console v3.1.0</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
   <style>
-    body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #0a0a0f; color: #e2e8f0; }
-    .font-mono { font-family: 'JetBrains Mono', monospace; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #0a0a0f;
+      color: #e2e8f0;
+      padding: 24px;
+      line-height: 1.5;
+    }
+    .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .max-w-7xl { max-width: 1280px; margin: 0 auto; }
+    
+    /* Card Styles */
+    .card {
+      background-color: #111118;
+      border: 1px solid #1e1e2e;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    
+    /* Header Bar */
+    .header-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 32px;
+    }
+    .header-title { font-size: 24px; font-weight: 800; color: #ffffff; display: flex; align-items: center; gap: 8px; }
+    .badge-v3 {
+      font-size: 11px; font-family: monospace; background: rgba(0, 255, 135, 0.1);
+      color: #00ff87; border: 1px solid rgba(0, 255, 135, 0.3); padding: 2px 8px; border-radius: 4px;
+    }
+    
+    /* Host & Key Inputs */
+    .config-group { display: flex; flex-wrap: wrap; items-center; gap: 12px; }
+    .input-box {
+      display: flex; align-items: center; background: #0a0a0f; border: 1px solid #334155;
+      border-radius: 10px; padding: 6px 12px; font-size: 12px; font-family: monospace; color: #94a3b8;
+    }
+    .input-box input {
+      background: transparent; border: none; color: #ffffff; outline: none; font-family: monospace; margin-left: 6px;
+    }
+    .btn-sync {
+      background: rgba(0, 255, 135, 0.15); border: 1px solid rgba(0, 255, 135, 0.4);
+      color: #00ff87; padding: 8px 16px; border-radius: 10px; font-weight: 600; cursor: pointer;
+      font-size: 13px; transition: all 0.2s;
+    }
+    .btn-sync:hover { background: rgba(0, 255, 135, 0.25); transform: translateY(-1px); }
+
+    /* Stat Grid */
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; margin-bottom: 32px; }
+    .stat-card { background: #111118; border: 1px solid #1e1e2e; border-radius: 16px; padding: 20px; }
+    .stat-label { font-size: 11px; font-family: monospace; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-value { font-size: 32px; font-weight: 900; font-family: monospace; color: #ffffff; }
+
+    /* Nav Tabs */
+    .tab-bar { display: flex; border-bottom: 1px solid #1e1e2e; margin-bottom: 32px; gap: 8px; }
+    .tab-btn {
+      padding: 12px 20px; font-size: 14px; font-weight: 600; color: #94a3b8; background: transparent;
+      border: none; border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.2s;
+    }
+    .tab-btn.active { color: #00ff87; border-bottom-color: #00ff87; background: rgba(0, 255, 135, 0.05); }
+
+    /* Forms */
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; margin-bottom: 32px; }
+    .form-group { margin-bottom: 16px; }
+    .form-label { display: block; font-size: 12px; font-family: monospace; color: #94a3b8; margin-bottom: 6px; }
+    .form-input, .form-select {
+      width: 100%; background: #0a0a0f; border: 1px solid #1e1e2e; border-radius: 10px;
+      padding: 10px 14px; font-size: 14px; color: #ffffff; outline: none; font-family: monospace;
+    }
+    .form-input:focus, .form-select:focus { border-color: #00ff87; }
+    .btn-submit {
+      width: 100%; padding: 12px; border-radius: 10px; border: none; font-weight: 700;
+      font-size: 14px; cursor: pointer; transition: all 0.2s; background: #00ff87; color: #0a0a0f;
+    }
+    .btn-submit:hover { background: #00cc6a; }
+
+    /* Tables */
+    .table-container { width: 100%; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; font-family: monospace; }
+    th { background: #0a0a0f; color: #94a3b8; padding: 12px; border-bottom: 1px solid #1e1e2e; }
+    td { padding: 14px 12px; border-bottom: 1px solid rgba(30, 30, 46, 0.6); color: #cbd5e1; }
+    tr:hover td { background: rgba(255, 255, 255, 0.03); }
+
+    /* Circuits Grid */
+    .circuit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+    .circuit-card { background: #0a0a0f; border: 1px solid #1e1e2e; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; justify-content: space-between; }
+    .circuit-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .state-badge {
+      font-size: 11px; font-weight: 700; font-family: monospace; text-transform: uppercase;
+      padding: 3px 10px; border-radius: 9999px; border: 1px solid transparent;
+    }
+    .state-closed { background: rgba(34, 197, 94, 0.15); color: #4ade80; border-color: rgba(34, 197, 94, 0.3); }
+    .state-open { background: rgba(239, 68, 68, 0.15); color: #f87171; border-color: rgba(239, 68, 68, 0.3); }
+    .btn-reset {
+      margin-top: 16px; width: 100%; padding: 8px; border-radius: 8px; background: rgba(0, 255, 135, 0.1);
+      color: #00ff87; border: 1px solid rgba(0, 255, 135, 0.3); font-weight: 600; font-family: monospace;
+      cursor: pointer; font-size: 12px;
+    }
+    .btn-reset:hover { background: rgba(0, 255, 135, 0.2); }
+    
+    .key-alert {
+      background: rgba(0, 255, 135, 0.1); border: 2px solid #00ff87; border-radius: 16px;
+      padding: 20px; margin-bottom: 32px;
+    }
+    .hidden { display: none !important; }
   </style>
 </head>
-<body class="min-h-screen bg-[#0a0a0f] p-6 text-slate-200">
-  <div class="max-w-7xl mx-auto">
+<body>
+  <div class="max-w-7xl">
     
     <!-- Top Header Bar -->
-    <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-2xl">
+    <div class="card header-bar">
       <div>
-        <div class="flex items-center gap-3 mb-1">
-          <span class="w-3 h-3 rounded-full bg-[#00ff87] animate-pulse"></span>
-          <h1 class="text-2xl font-extrabold text-white tracking-tight flex items-center gap-2">
-            AgentGuard MCP Admin Console
-            <span className="text-xs font-mono bg-[#00ff87]/10 text-[#00ff87] border border-[#00ff87]/30 px-2 py-0.5 rounded">
-              v3.1.0 Live
-            </span>
-          </h1>
+        <div class="header-title">
+          <span>AgentGuard MCP Admin Console</span>
+          <span class="badge-v3">v3.1.0 Live</span>
         </div>
-        <p class="text-slate-400 text-sm">
-          Enterprise operational dashboard for API keys, rate limits, tool circuit breakers, and webhooks.
+        <p style="color: #94a3b8; font-size: 14px; margin-top: 4px;">
+          Enterprise operational console for API keys, rate limits, tool circuit breakers, and webhooks.
         </p>
       </div>
 
-      <div class="flex flex-wrap items-center gap-3">
-        <div class="flex items-center bg-[#0a0a0f] border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-slate-300 font-mono">
-          <span class="text-slate-500 mr-2">Host:</span>
-          <input id="serverUrlInput" type="text" value="" class="bg-transparent border-none text-white focus:outline-none w-48" />
+      <div class="config-group">
+        <div class="input-box">
+          <span>Host:</span>
+          <input id="serverUrlInput" type="text" value="" style="width: 180px;" />
         </div>
 
-        <div class="flex items-center bg-[#0a0a0f] border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-slate-300 font-mono">
-          <span class="text-slate-500 mr-2">Key:</span>
-          <input id="adminKeyInput" type="password" value="" placeholder="Admin Secret Key" class="bg-transparent border-none text-white focus:outline-none w-36" />
+        <div class="input-box">
+          <span>Key:</span>
+          <input id="adminKeyInput" type="password" value="" placeholder="Admin Key" style="width: 130px;" />
         </div>
 
-        <button onclick="fetchData()" class="px-4 py-2 rounded-xl bg-[#00ff87]/10 border border-[#00ff87]/30 text-[#00ff87] hover:bg-[#00ff87]/20 transition-all text-xs font-semibold font-mono">
+        <button onclick="fetchData()" class="btn-sync">
           🔄 Sync Data
         </button>
       </div>
     </div>
 
-    <!-- Error Alert Banner -->
-    <div id="errorAlert" class="hidden bg-red-500/10 border border-red-500/30 text-red-400 p-4 rounded-xl text-sm mb-6 font-mono"></div>
+    <!-- Error Banner -->
+    <div id="errorAlert" class="key-alert hidden" style="border-color: #ef4444; background: rgba(239, 68, 68, 0.1); color: #f87171; font-family: monospace;"></div>
 
     <!-- Top 4 Metric Cards -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-      <div class="bg-[#111118] border border-[#1e1e2e] p-5 rounded-2xl">
-        <div class="text-slate-400 text-xs font-mono mb-2">TOTAL TOOL CALLS</div>
-        <div id="statTotalCalls" class="text-3xl font-black text-white font-mono">0</div>
-        <div class="text-[11px] text-slate-500 mt-1 font-mono">Current Month</div>
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-label">TOTAL TOOL CALLS</div>
+        <div id="statTotalCalls" class="stat-value">0</div>
+        <div style="font-size: 11px; color: #64748b; margin-top: 4px; font-family: monospace;">Current Month</div>
       </div>
 
-      <div class="bg-[#111118] border border-[#1e1e2e] p-5 rounded-2xl">
-        <div class="text-slate-400 text-xs font-mono mb-2">TRACKED CIRCUITS</div>
-        <div id="statCircuits" class="text-3xl font-black text-white font-mono">0</div>
-        <div class="text-[11px] text-slate-500 mt-1 font-mono">Threshold: 5 failures → OPEN</div>
+      <div class="stat-card">
+        <div class="stat-label">TRACKED CIRCUITS</div>
+        <div id="statCircuits" class="stat-value">0</div>
+        <div style="font-size: 11px; color: #64748b; margin-top: 4px; font-family: monospace;">Threshold: 5 failures → OPEN</div>
       </div>
 
-      <div class="bg-[#111118] border border-[#1e1e2e] p-5 rounded-2xl">
-        <div class="text-slate-400 text-xs font-mono mb-2">REGISTERED TENANTS</div>
-        <div id="statTenants" class="text-3xl font-black text-white font-mono">0</div>
-        <div class="text-[11px] text-slate-500 mt-1 font-mono">Isolated database state</div>
+      <div class="stat-card">
+        <div class="stat-label">REGISTERED TENANTS</div>
+        <div id="statTenants" class="stat-value">0</div>
+        <div style="font-size: 11px; color: #64748b; margin-top: 4px; font-family: monospace;">Isolated database state</div>
       </div>
 
-      <div class="bg-[#111118] border border-[#1e1e2e] p-5 rounded-2xl">
-        <div class="text-slate-400 text-xs font-mono mb-2">AVG LATENCY</div>
-        <div id="statLatency" class="text-3xl font-black text-white font-mono">&lt; 10ms</div>
-        <div class="text-[11px] text-slate-500 mt-1 font-mono">SQLite WAL mode</div>
+      <div class="stat-card">
+        <div class="stat-label">AVG LATENCY</div>
+        <div id="statLatency" class="stat-value">&lt; 10ms</div>
+        <div style="font-size: 11px; color: #64748b; margin-top: 4px; font-family: monospace;">SQLite WAL mode</div>
       </div>
     </div>
 
-    <!-- Generated Key Notification -->
-    <div id="generatedKeyBox" class="hidden bg-[#00ff87]/10 border-2 border-[#00ff87] rounded-2xl p-6 mb-8 shadow-2xl">
-      <div class="text-[#00ff87] font-mono text-xs font-bold uppercase tracking-wider mb-2">
-        🔑 New Hashed API Key Created — Save This Key Immediately!
+    <!-- Key Generated Alert Box -->
+    <div id="generatedKeyBox" class="key-alert hidden">
+      <div style="color: #00ff87; font-family: monospace; font-size: 12px; font-weight: 700; text-transform: uppercase; margin-bottom: 8px;">
+        🔑 New API Key Generated — Save This Key Now!
       </div>
-      <div class="flex items-center justify-between bg-[#0a0a0f] border border-[#00ff87]/40 rounded-xl p-3 font-mono text-sm text-[#00ff87]">
-        <span id="rawKeyDisplay" class="truncate mr-4"></span>
-        <button onclick="copyGeneratedKey()" class="px-3 py-1.5 rounded-lg bg-[#00ff87] text-black font-bold text-xs">
-          Copy Raw Key
+      <div style="display: flex; align-items: center; justify-content: space-between; background: #0a0a0f; border: 1px solid rgba(0, 255, 135, 0.4); padding: 12px; border-radius: 10px; font-family: monospace; font-size: 14px; color: #00ff87;">
+        <span id="rawKeyDisplay" style="overflow: hidden; text-overflow: ellipsis;"></span>
+        <button onclick="copyGeneratedKey()" style="padding: 6px 14px; border-radius: 6px; background: #00ff87; color: #0a0a0f; font-weight: 700; border: none; cursor: pointer;">
+          Copy Key
         </button>
       </div>
     </div>
 
-    <!-- Tab Buttons -->
-    <div class="flex items-center border-b border-[#1e1e2e] mb-8 gap-2">
-      <button id="tabBtnAnalytics" onclick="switchTab('analytics')" class="px-5 py-3 text-sm font-semibold transition-all border-b-2 border-[#00ff87] text-[#00ff87] bg-[#00ff87]/5">
+    <!-- Navigation Tabs -->
+    <div class="tab-bar">
+      <button id="tabBtnAnalytics" onclick="switchTab('analytics')" class="tab-btn active">
         📊 Usage Analytics
       </button>
-      <button id="tabBtnKeys" onclick="switchTab('keys')" class="px-5 py-3 text-sm font-semibold transition-all border-b-2 border-transparent text-slate-400 hover:text-white">
+      <button id="tabBtnKeys" onclick="switchTab('keys')" class="tab-btn">
         🔑 API Keys &amp; Tenants
       </button>
-      <button id="tabBtnCircuits" onclick="switchTab('circuits')" class="px-5 py-3 text-sm font-semibold transition-all border-b-2 border-transparent text-slate-400 hover:text-white">
+      <button id="tabBtnCircuits" onclick="switchTab('circuits')" class="tab-btn">
         ⚡ Circuit Breakers
       </button>
-      <button id="tabBtnWebhooks" onclick="switchTab('webhooks')" class="px-5 py-3 text-sm font-semibold transition-all border-b-2 border-transparent text-slate-400 hover:text-white">
+      <button id="tabBtnWebhooks" onclick="switchTab('webhooks')" class="tab-btn">
         🔔 Webhooks
       </button>
     </div>
 
     <!-- Tab 1: Usage Analytics -->
-    <div id="tabAnalytics" class="space-y-8">
-      <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-        <h3 class="text-lg font-bold text-white mb-4">Tool Invocation Frequency</h3>
-        <div id="toolBarsContainer" class="space-y-3">
-          <div class="text-slate-500 text-sm font-mono italic py-4 text-center">Loading analytics...</div>
+    <div id="tabAnalytics">
+      <div class="card">
+        <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 16px;">Tool Invocation Frequency</h3>
+        <div id="toolBarsContainer" style="display: flex; flex-direction: column; gap: 16px;">
+          <div style="color: #64748b; font-family: monospace; text-align: center; padding: 24px;">Loading analytics...</div>
         </div>
       </div>
     </div>
 
     <!-- Tab 2: API Keys & Tenants -->
-    <div id="tabKeys" class="hidden space-y-8">
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div id="tabKeys" class="hidden">
+      <div class="form-grid">
         
         <!-- Create Tenant Form -->
-        <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-          <h3 class="text-base font-bold text-white mb-4">Create New Tenant</h3>
-          <form onsubmit="handleCreateTenant(event)" class="space-y-4">
-            <div>
-              <label class="block text-xs font-mono text-slate-400 mb-1">Tenant ID</label>
-              <input id="inputTenantId" type="text" required placeholder="e.g. acme-corp" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono" />
+        <div class="card">
+          <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">Create New Tenant</h3>
+          <form onsubmit="handleCreateTenant(event)">
+            <div class="form-group">
+              <label class="form-label">Tenant ID</label>
+              <input id="inputTenantId" type="text" required placeholder="e.g. acme-corp" class="form-input" />
             </div>
-            <div>
-              <label class="block text-xs font-mono text-slate-400 mb-1">Company / Team Name</label>
-              <input id="inputTenantName" type="text" required placeholder="e.g. Acme Corporation" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white" />
+            <div class="form-group">
+              <label class="form-label">Company / Team Name</label>
+              <input id="inputTenantName" type="text" required placeholder="e.g. Acme Corporation" class="form-input" />
             </div>
-            <div>
-              <label class="block text-xs font-mono text-slate-400 mb-1">Subscription Plan</label>
-              <select id="inputTenantPlan" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono">
+            <div class="form-group">
+              <label class="form-label">Subscription Plan</label>
+              <select id="inputTenantPlan" class="form-select">
                 <option value="free">Free (1,000 calls/mo)</option>
                 <option value="starter">Starter (50,000 calls/mo)</option>
                 <option value="pro" selected>Pro (500,000 calls/mo)</option>
                 <option value="team">Team (5,000,000 calls/mo)</option>
               </select>
             </div>
-            <button type="submit" class="w-full py-2.5 rounded-xl bg-cyan-500 text-black font-bold text-sm hover:bg-cyan-400">
+            <button type="submit" class="btn-submit" style="background: #06b6d4; color: #000;">
               Create Tenant
             </button>
           </form>
         </div>
 
         <!-- Generate API Key Form -->
-        <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-          <h3 class="text-base font-bold text-white mb-4">Generate Live API Key</h3>
-          <form onsubmit="handleCreateApiKey(event)" class="space-y-4">
-            <div>
-              <label class="block text-xs font-mono text-slate-400 mb-1">Assign to Tenant</label>
-              <select id="selectKeyTenant" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono">
+        <div class="card">
+          <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">Generate Live API Key</h3>
+          <form onsubmit="handleCreateApiKey(event)">
+            <div class="form-group">
+              <label class="form-label">Assign to Tenant</label>
+              <select id="selectKeyTenant" class="form-select">
                 <option value="default-tenant">Default Tenant</option>
               </select>
             </div>
-            <div>
-              <label class="block text-xs font-mono text-slate-400 mb-1">Key Description</label>
-              <input id="inputKeyName" type="text" placeholder="e.g. Production Agent Key" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white" />
+            <div class="form-group">
+              <label class="form-label">Key Description</label>
+              <input id="inputKeyName" type="text" placeholder="e.g. Production Agent Key" class="form-input" />
             </div>
-            <button type="submit" class="w-full py-2.5 rounded-xl bg-[#00ff87] text-black font-bold text-sm hover:bg-[#00cc6a]">
+            <button type="submit" class="btn-submit">
               Generate Key
             </button>
           </form>
@@ -171,21 +271,21 @@
       </div>
 
       <!-- API Keys Table -->
-      <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-        <h3 class="text-lg font-bold text-white mb-4">Active API Keys</h3>
-        <div class="overflow-x-auto">
-          <table class="w-full text-left text-xs font-mono text-slate-300">
-            <thead class="bg-[#0a0a0f] text-slate-400 border-b border-[#1e1e2e]">
+      <div class="card">
+        <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 16px;">Active API Keys</h3>
+        <div class="table-container">
+          <table>
+            <thead>
               <tr>
-                <th class="p-3">Prefix</th>
-                <th class="p-3">Name</th>
-                <th class="p-3">Tenant ID</th>
-                <th class="p-3">Created</th>
-                <th class="p-3 text-right">Action</th>
+                <th>Prefix</th>
+                <th>Name</th>
+                <th>Tenant ID</th>
+                <th>Created</th>
+                <th style="text-align: right;">Action</th>
               </tr>
             </thead>
             <tbody id="apiKeysTableBody">
-              <tr><td colSpan="5" class="p-6 text-center text-slate-500 italic">No API keys found.</td></tr>
+              <tr><td colspan="5" style="text-align: center; color: #64748b; padding: 24px;">No API keys found.</td></tr>
             </tbody>
           </table>
         </div>
@@ -193,48 +293,48 @@
     </div>
 
     <!-- Tab 3: Circuit Breakers Grid -->
-    <div id="tabCircuits" class="hidden bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-      <h3 class="text-lg font-bold text-white mb-6">Circuit Breakers Status Grid</h3>
-      <div id="circuitsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        <div class="text-slate-500 text-sm font-mono italic py-4 col-span-3 text-center">Loading circuits...</div>
+    <div id="tabCircuits" class="card hidden">
+      <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 24px;">Circuit Breakers Status Grid</h3>
+      <div id="circuitsGrid" class="circuit-grid">
+        <div style="color: #64748b; font-family: monospace; text-align: center; grid-column: span 3; padding: 24px;">Loading circuits...</div>
       </div>
     </div>
 
     <!-- Tab 4: Webhooks -->
-    <div id="tabWebhooks" class="hidden space-y-8">
-      <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-        <h3 class="text-base font-bold text-white mb-4">Subscribe New Outbound Webhook</h3>
-        <form onsubmit="handleCreateWebhook(event)" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-          <div>
-            <label class="block text-xs font-mono text-slate-400 mb-1">Tenant</label>
-            <select id="selectWebhookTenant" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono">
+    <div id="tabWebhooks" class="hidden">
+      <div class="card" style="margin-bottom: 32px;">
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">Subscribe New Webhook</h3>
+        <form onsubmit="handleCreateWebhook(event)" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; align-items: end;">
+          <div class="form-group" style="margin: 0;">
+            <label class="form-label">Tenant</label>
+            <select id="selectWebhookTenant" class="form-select">
               <option value="default-tenant">Default Tenant</option>
             </select>
           </div>
-          <div>
-            <label class="block text-xs font-mono text-slate-400 mb-1">Webhook Target URL</label>
-            <input id="inputWebhookUrl" type="url" required placeholder="https://api.yourdomain.com/webhooks" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono" />
+          <div class="form-group" style="margin: 0;">
+            <label class="form-label">Webhook URL</label>
+            <input id="inputWebhookUrl" type="url" required placeholder="https://api.yourdomain.com/webhooks" class="form-input" />
           </div>
-          <button type="submit" class="py-2.5 rounded-xl bg-purple-500 text-white font-bold text-sm hover:bg-purple-400">
+          <button type="submit" class="btn-submit" style="background: #a855f7; color: #fff;">
             Add Webhook
           </button>
         </form>
       </div>
 
-      <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-        <h3 class="text-lg font-bold text-white mb-4">Active Webhooks</h3>
-        <div class="overflow-x-auto">
-          <table class="w-full text-left text-xs font-mono text-slate-300">
-            <thead class="bg-[#0a0a0f] text-slate-400 border-b border-[#1e1e2e]">
+      <div class="card">
+        <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 16px;">Active Webhooks</h3>
+        <div class="table-container">
+          <table>
+            <thead>
               <tr>
-                <th class="p-3">ID</th>
-                <th class="p-3">Tenant</th>
-                <th class="p-3">URL</th>
-                <th class="p-3 text-right">Action</th>
+                <th>ID</th>
+                <th>Tenant</th>
+                <th>URL</th>
+                <th style="text-align: right;">Action</th>
               </tr>
             </thead>
             <tbody id="webhooksTableBody">
-              <tr><td colSpan="4" class="p-6 text-center text-slate-500 italic">No webhooks configured.</td></tr>
+              <tr><td colspan="4" style="text-align: center; color: #64748b; padding: 24px;">No webhooks configured.</td></tr>
             </tbody>
           </table>
         </div>
@@ -244,22 +344,18 @@
   </div>
 
   <script>
-    // Set Host default URL
     document.getElementById('serverUrlInput').value = window.location.origin;
 
-    let currentTab = 'analytics';
-
     function switchTab(tabName) {
-      currentTab = tabName;
       ['analytics', 'keys', 'circuits', 'webhooks'].forEach(t => {
         const tabEl = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
         const btnEl = document.getElementById('tabBtn' + t.charAt(0).toUpperCase() + t.slice(1));
         if (t === tabName) {
           tabEl.classList.remove('hidden');
-          btnEl.className = 'px-5 py-3 text-sm font-semibold transition-all border-b-2 border-[#00ff87] text-[#00ff87] bg-[#00ff87]/5';
+          btnEl.className = 'tab-btn active';
         } else {
           tabEl.classList.add('hidden');
-          btnEl.className = 'px-5 py-3 text-sm font-semibold transition-all border-b-2 border-transparent text-slate-400 hover:text-white';
+          btnEl.className = 'tab-btn';
         }
       });
     }
@@ -282,7 +378,6 @@
           fetch(`${serverUrl}/admin/webhooks`, { headers }).catch(() => null),
         ]);
 
-        // 1. Render Usage & Stats
         if (usageRes && usageRes.ok) {
           const usage = await usageRes.json();
           const totalCalls = usage.total_calls || (usage.tenants ? usage.tenants.reduce((acc, t) => acc + t.total_calls, 0) : 0);
@@ -294,119 +389,112 @@
             toolBarsContainer.innerHTML = usage.calls_by_tool.map(t => {
               const percent = Math.round((t.count / (totalCalls || 1)) * 100);
               return `
-                <div class="space-y-1">
-                  <div class="flex justify-between text-xs font-mono text-slate-300">
-                    <span class="font-bold text-[#00ff87]">${t.tool_name}</span>
+                <div>
+                  <div style="display: flex; justify-content: space-between; font-size: 12px; font-family: monospace; margin-bottom: 4px;">
+                    <span style="font-weight: 700; color: #00ff87;">${t.tool_name}</span>
                     <span>${t.count} calls (${percent}%)</span>
                   </div>
-                  <div class="w-full bg-[#0a0a0f] rounded-full h-2 overflow-hidden border border-white/5">
-                    <div class="bg-[#00ff87] h-full rounded-full" style="width: ${percent}%"></div>
+                  <div style="width: 100%; background: #0a0a0f; border-radius: 9999px; height: 8px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.05);">
+                    <div style="background: #00ff87; height: 100%; width: ${percent}%;"></div>
                   </div>
                 </div>
               `;
             }).join('');
           } else {
-            toolBarsContainer.innerHTML = '<div class="text-slate-500 text-sm font-mono italic py-4 text-center">No tool call data recorded for this month yet.</div>';
+            toolBarsContainer.innerHTML = '<div style="color: #64748b; font-family: monospace; text-align: center; padding: 16px;">No tool calls recorded this month yet.</div>';
           }
         }
 
-        // 2. Render Tenants
-        let tenantsList = [];
         if (tenantsRes && tenantsRes.ok) {
           const d = await tenantsRes.json();
-          tenantsList = d.tenants || [];
+          const tenantsList = d.tenants || [];
           document.getElementById('statTenants').innerText = tenantsList.length || 1;
 
-          const tenantOptionsHtml = tenantsList.map(t => `<option value="${t.tenant_id}">${t.name} (${t.tenant_id}) — ${t.plan.toUpperCase()}</option>`).join('');
-          document.getElementById('selectKeyTenant').innerHTML = tenantOptionsHtml || '<option value="default-tenant">Default Tenant</option>';
-          document.getElementById('selectWebhookTenant').innerHTML = tenantOptionsHtml || '<option value="default-tenant">Default Tenant</option>';
+          const optionsHtml = tenantsList.map(t => `<option value="${t.tenant_id}">${t.name} (${t.tenant_id}) — ${t.plan.toUpperCase()}</option>`).join('');
+          document.getElementById('selectKeyTenant').innerHTML = optionsHtml || '<option value="default-tenant">Default Tenant</option>';
+          document.getElementById('selectWebhookTenant').innerHTML = optionsHtml || '<option value="default-tenant">Default Tenant</option>';
         }
 
-        // 3. Render API Keys
         if (keysRes && keysRes.ok) {
           const d = await keysRes.json();
           const keys = d.api_keys || [];
           const tbody = document.getElementById('apiKeysTableBody');
           if (keys.length > 0) {
             tbody.innerHTML = keys.map(k => `
-              <tr class="border-b border-[#1e1e2e]/50 hover:bg-white/5">
-                <td class="p-3 font-bold text-[#00ff87]">${k.prefix}</td>
-                <td class="p-3 text-white">${k.name}</td>
-                <td class="p-3">${k.tenant_id}</td>
-                <td class="p-3 text-slate-400">${k.created_at ? k.created_at.slice(0, 10) : ''}</td>
-                <td class="p-3 text-right">
-                  <button onclick="handleRevokeKey('${k.id}')" class="px-2.5 py-1 rounded bg-red-500/10 text-red-400 border border-red-500/30 text-[11px]">
+              <tr>
+                <td style="font-weight: 700; color: #00ff87;">${k.prefix}</td>
+                <td style="color: #ffffff;">${k.name}</td>
+                <td>${k.tenant_id}</td>
+                <td style="color: #64748b;">${k.created_at ? k.created_at.slice(0, 10) : ''}</td>
+                <td style="text-align: right;">
+                  <button onclick="handleRevokeKey('${k.id}')" style="padding: 4px 10px; border-radius: 4px; background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); font-size: 11px; cursor: pointer;">
                     Revoke
                   </button>
                 </td>
               </tr>
             `).join('');
           } else {
-            tbody.innerHTML = '<tr><td colSpan="5" class="p-6 text-center text-slate-500 italic">No API keys found. Generate a key above.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 24px;">No API keys found. Generate a key above.</td></tr>';
           }
         }
 
-        // 4. Render Circuits
         if (circuitsRes && circuitsRes.ok) {
           const d = await circuitsRes.json();
           const circuits = d.circuits || [];
           const openCount = circuits.filter(c => c.state === 'OPEN').length;
-          document.getElementById('statCircuits').innerHTML = `${circuits.length} ${openCount > 0 ? `<span class="text-xs text-red-400 font-bold bg-red-500/20 px-2 py-0.5 rounded-full ml-1">${openCount} OPEN</span>` : ''}`;
+          document.getElementById('statCircuits').innerHTML = `${circuits.length} ${openCount > 0 ? `<span style="font-size: 11px; color: #f87171; background: rgba(239,68,68,0.2); padding: 2px 8px; border-radius: 9999px; margin-left: 6px;">${openCount} OPEN</span>` : ''}`;
 
           const grid = document.getElementById('circuitsGrid');
           if (circuits.length > 0) {
             grid.innerHTML = circuits.map(c => `
-              <div class="bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl p-5 flex flex-col justify-between">
+              <div class="circuit-card">
                 <div>
-                  <div class="flex items-center justify-between mb-3">
-                    <span class="font-mono text-xs font-bold text-white truncate max-w-[180px]">${c.name}</span>
-                    <span class="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold uppercase border ${c.state === 'CLOSED' ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30 animate-pulse'}">
-                      ${c.state}
-                    </span>
+                  <div class="circuit-header">
+                    <span style="font-family: monospace; font-size: 12px; font-weight: 700; color: #ffffff;">${c.name}</span>
+                    <span class="state-badge ${c.state === 'CLOSED' ? 'state-closed' : 'state-open'}">${c.state}</span>
                   </div>
-                  <div class="space-y-1.5 text-xs font-mono text-slate-400 mb-4">
-                    <div class="flex justify-between">
+                  <div style="font-size: 12px; font-family: monospace; color: #94a3b8; display: flex; flex-direction: column; gap: 4px;">
+                    <div style="display: flex; justify-content: space-between;">
                       <span>Failures:</span>
-                      <span class="${c.failure_count > 0 ? 'text-red-400 font-bold' : 'text-slate-300'}">${c.failure_count} / 5</span>
+                      <span style="color: ${c.failure_count > 0 ? '#f87171' : '#cbd5e1'}; font-weight: 700;">${c.failure_count} / 5</span>
                     </div>
-                    <div class="flex justify-between">
+                    <div style="display: flex; justify-content: space-between;">
                       <span>Successes:</span>
-                      <span class="text-slate-300">${c.success_count}</span>
+                      <span style="color: #cbd5e1;">${c.success_count}</span>
                     </div>
                   </div>
                 </div>
                 ${c.state !== 'CLOSED' ? `
-                  <button onclick="handleResetCircuit('${encodeURIComponent(c.name)}')" class="w-full py-1.5 rounded bg-[#00ff87]/10 text-[#00ff87] border border-[#00ff87]/30 hover:bg-[#00ff87]/20 text-xs font-semibold font-mono">
+                  <button onclick="handleResetCircuit('${encodeURIComponent(c.name)}')" class="btn-reset">
                     Reset Circuit
                   </button>
                 ` : ''}
               </div>
             `).join('');
           } else {
-            grid.innerHTML = '<div class="text-slate-500 text-sm font-mono italic py-4 col-span-3 text-center">No circuits tracked yet.</div>';
+            grid.innerHTML = '<div style="color: #64748b; font-family: monospace; text-align: center; grid-column: span 3; padding: 24px;">No circuits tracked yet.</div>';
           }
         }
 
-        // 5. Render Webhooks
         if (webhooksRes && webhooksRes.ok) {
           const d = await webhooksRes.json();
           const webhooks = d.webhooks || [];
           const tbody = document.getElementById('webhooksTableBody');
           if (webhooks.length > 0) {
             tbody.innerHTML = webhooks.map(w => `
-              <tr class="border-b border-[#1e1e2e]/50">
-                <td class="p-3 font-bold text-purple-400">${w.id}</td>
-                <td class="p-3 text-white">${w.tenant_id}</td>
-                <td class="p-3 text-slate-300 truncate max-w-xs">${w.url}</td>
-                <td class="p-3 text-right">
-                  <button onclick="handleDeleteWebhook('${w.id}')" class="px-2.5 py-1 rounded bg-red-500/10 text-red-400 border border-red-500/30 text-[11px]">
+              <tr>
+                <td style="font-weight: 700; color: #c084fc;">${w.id}</td>
+                <td style="color: #ffffff;">${w.tenant_id}</td>
+                <td style="color: #cbd5e1;">${w.url}</td>
+                <td style="text-align: right;">
+                  <button onclick="handleDeleteWebhook('${w.id}')" style="padding: 4px 10px; border-radius: 4px; background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); font-size: 11px; cursor: pointer;">
                     Delete
                   </button>
                 </td>
               </tr>
             `).join('');
           } else {
-            tbody.innerHTML = '<tr><td colSpan="4" class="p-6 text-center text-slate-500 italic">No webhooks configured.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #64748b; padding: 24px;">No webhooks configured.</td></tr>';
           }
         }
 
@@ -435,7 +523,7 @@
           document.getElementById('inputTenantName').value = '';
           fetchData();
         }
-      } catch (err) { alert('Failed to create tenant: ' + err.message); }
+      } catch (err) { alert('Failed: ' + err.message); }
     }
 
     async function handleCreateApiKey(e) {
@@ -458,7 +546,7 @@
           document.getElementById('inputKeyName').value = '';
           fetchData();
         }
-      } catch (err) { alert('Failed to create API key: ' + err.message); }
+      } catch (err) { alert('Failed: ' + err.message); }
     }
 
     function copyGeneratedKey() {
@@ -476,7 +564,7 @@
           headers: { ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
         });
         fetchData();
-      } catch (err) { alert('Failed to revoke key: ' + err.message); }
+      } catch (err) { alert('Failed: ' + err.message); }
     }
 
     async function handleResetCircuit(circuitName) {
@@ -488,7 +576,7 @@
           headers: { 'Content-Type': 'application/json', ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
         });
         fetchData();
-      } catch (err) { alert('Failed to reset circuit: ' + err.message); }
+      } catch (err) { alert('Failed: ' + err.message); }
     }
 
     async function handleCreateWebhook(e) {
@@ -506,7 +594,7 @@
         });
         document.getElementById('inputWebhookUrl').value = '';
         fetchData();
-      } catch (err) { alert('Failed to add webhook: ' + err.message); }
+      } catch (err) { alert('Failed: ' + err.message); }
     }
 
     async function handleDeleteWebhook(id) {
@@ -518,12 +606,12 @@
           headers: { ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
         });
         fetchData();
-      } catch (err) { alert('Failed to delete webhook: ' + err.message); }
+      } catch (err) { alert('Failed: ' + err.message); }
     }
 
-    // Initial fetch on load
+    // Load data on page load
     fetchData();
-    setInterval(fetchData, 15000); // 15s clean polling
+    setInterval(fetchData, 15000);
   </script>
 </body>
 </html>

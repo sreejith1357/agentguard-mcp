@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: agentguard
+Version: 3.1.0
+Summary: Official Python Client SDK for AgentGuard MCP — Agent Reliability & Security Infrastructure
+Author-email: Sreejith <sjith310@gmail.com>
+License: MIT
+Project-URL: Homepage, https://agentguard.dev
+Project-URL: Repository, https://github.com/sreejith1357/agentguard-mcp
+Keywords: mcp,agentguard,ai-agents,reliability,circuit-breaker,anomaly-detection
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: httpx>=0.24.0
+Requires-Dist: pydantic>=2.0.0
