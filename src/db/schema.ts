@@ -195,6 +195,36 @@ export function initializeDatabase(): void {
         { name: "status", type: "TEXT", defaultVal: "learning" },
         { name: "winsorized_count", type: "INTEGER", defaultVal: "0" },
     ]);
+
+    // -----------------------------------------------------------------------
+    // Table: call_logs
+    // -----------------------------------------------------------------------
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS call_logs (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id        TEXT NOT NULL,
+            project_id       TEXT NOT NULL,
+            env              TEXT NOT NULL,
+            tool_name        TEXT NOT NULL,
+            success          INTEGER NOT NULL DEFAULT 1,
+            response_time_ms INTEGER,
+            error_code       TEXT,
+            called_at        TEXT NOT NULL,
+            month_key        TEXT NOT NULL
+        )
+    `);
+
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_call_logs_tenant ON call_logs(tenant_id, month_key)
+    `);
+
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_call_logs_month ON call_logs(month_key)
+    `);
+
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_call_logs_tool ON call_logs(tenant_id, tool_name)
+    `);
 }
 
 // Run immediately when the module is first imported

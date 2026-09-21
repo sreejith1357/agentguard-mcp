@@ -118,3 +118,33 @@ export function authenticateRequest(req: Request): AuthResult {
         error: "Invalid API key",
     };
 }
+
+/**
+ * Verifies if the incoming Authorization header contains a valid admin API key.
+ * Supports "Bearer <key>" or "Bearer <tenant_id>:<project_id>:<env>:<key>" or raw "<key>".
+ * If AGENTGUARD_API_KEY is not set (open mode), returns true.
+ */
+export function verifyAdminKey(authHeader?: string): boolean {
+    const apiKey = process.env.AGENTGUARD_API_KEY;
+
+    if (!apiKey || apiKey.trim() === "") {
+        return true;
+    }
+
+    if (!authHeader || typeof authHeader !== "string") {
+        return false;
+    }
+
+    const tokenRaw = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : authHeader.trim();
+    const parts = tokenRaw.split(":");
+    const tokenKey = parts.length === 4 ? parts[3] : tokenRaw;
+
+    const tokenBuf = Buffer.from(tokenKey, "utf8");
+    const keyBuf = Buffer.from(apiKey, "utf8");
+
+    if (tokenBuf.length !== keyBuf.length) {
+        return false;
+    }
+
+    return crypto.timingSafeEqual(tokenBuf, keyBuf);
+}

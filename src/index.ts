@@ -20,8 +20,9 @@ import { getStorageStats } from "./utils/storage.js";
 import { getAllCircuits } from "./utils/circuitStore.js";
 import { getBaselineStats } from "./utils/metricStore.js";
 import { initializeDatabase } from "./db/schema.js";
-import { authenticateRequest, tenantContextStorage } from "./utils/auth.js";
+import { authenticateRequest, tenantContextStorage, verifyAdminKey } from "./utils/auth.js";
 import { runDatabaseMaintenance } from "./utils/maintenance.js";
+import { logCall, getUsageStats, getAllTenantsStats, getMonthlyUsageSummary } from "./utils/callLogger.js";
 
 // ---------------------------------------------------------------------------
 // Server setup
@@ -85,7 +86,7 @@ app.use(
 );
 
 const SERVER_NAME = "AgentGuard MCP";
-const SERVER_VERSION = "3.0.0";
+const SERVER_VERSION = "3.1.0";
 const START_TIME = Date.now();
 
 const REGISTERED_TOOLS = [
@@ -153,6 +154,65 @@ app.use("/mcp", (req: Request, res: Response, next: NextFunction) => {
 // ---------------------------------------------------------------------------
 
 app.post("/mcp", async (req: Request, res: Response) => {
+    const startTime = Date.now();
+    let isSuccess = true;
+    let errorCode: string | undefined = undefined;
+
+    // Extract tool name from request body
+    const toolName = req.body?.params?.name || "unknown";
+    const tenantCtx = (req as any).tenantIdentity;
+
+    // Wrap res.write & res.end to measure response timing & capture completion state
+    const originalWrite = res.write.bind(res);
+    const originalEnd = res.end.bind(res);
+    let responseBody = "";
+
+    res.write = function (chunk: any, ...args: any[]) {
+        if (chunk) {
+            responseBody += chunk.toString();
+        }
+        return originalWrite(chunk, ...args);
+    };
+
+    res.end = function (chunk?: any, ...args: any[]) {
+        if (chunk) {
+            responseBody += chunk.toString();
+        }
+        const responseTime = Date.now() - startTime;
+
+        if (res.statusCode >= 400) {
+            isSuccess = false;
+            errorCode = `HTTP_${res.statusCode}`;
+        } else if (
+            responseBody.includes('"isError":true') ||
+            responseBody.includes('"_error"') ||
+            responseBody.includes('"error":{') ||
+            responseBody.includes('"error": {')
+        ) {
+            isSuccess = false;
+            try {
+                const match =
+                    responseBody.match(/"error"\s*:\s*"([^"]+)"/) ||
+                    responseBody.match(/"code"\s*:\s*"?([^",}\s]+)"?/);
+                if (match && match[1]) {
+                    errorCode = match[1];
+                }
+            } catch { /* ignore */ }
+        }
+
+        logCall({
+            tenant_id: tenantCtx?.tenant_id || "default-tenant",
+            project_id: tenantCtx?.project_id || "default-project",
+            env: tenantCtx?.env || (process.env.AGENTGUARD_API_KEY ? "production" : "development"),
+            tool_name: toolName,
+            success: isSuccess,
+            response_time_ms: responseTime,
+            ...(errorCode && { error_code: errorCode }),
+        });
+
+        return originalEnd(chunk, ...args);
+    };
+
     try {
         const identity = (req as any).tenantIdentity;
         const handleMcpRequest = async () => {
@@ -178,6 +238,32 @@ app.post("/mcp", async (req: Request, res: Response) => {
             timestamp: new Date().toISOString(),
         });
     }
+});
+
+// ---------------------------------------------------------------------------
+// Admin Usage Analytics endpoint
+// ---------------------------------------------------------------------------
+
+app.get("/admin/usage", (req: Request, res: Response) => {
+    const auth = req.headers.authorization;
+    if (!verifyAdminKey(auth)) {
+        res.status(401).json({ error: "Unauthorized", timestamp: new Date().toISOString() });
+        return;
+    }
+
+    const tenant_id = (req.query.tenant_id as string) || "all";
+    const month = (req.query.month as string) || new Date().toISOString().slice(0, 7);
+
+    if (tenant_id === "all") {
+        res.json({
+            month,
+            tenants: getAllTenantsStats(month),
+            timestamp: new Date().toISOString(),
+        });
+        return;
+    }
+
+    res.json(getUsageStats(tenant_id, month));
 });
 
 // ---------------------------------------------------------------------------
@@ -224,6 +310,12 @@ app.get("/health", async (_req: Request, res: Response) => {
         confident_baselines = baselineStats.confident_baselines;
     } catch { /* non-fatal */ }
 
+    // Monthly usage stats — wrapped for safety
+    let usageSummary = { total_calls_this_month: 0, active_tenants_this_month: 0 };
+    try {
+        usageSummary = getMonthlyUsageSummary();
+    } catch { /* non-fatal */ }
+
     res.json({
         status: "ok",
         server: SERVER_NAME,
@@ -238,6 +330,7 @@ app.get("/health", async (_req: Request, res: Response) => {
             total_checkpoints: storage.total_checkpoints,
             checkpoint_limit_per_session: parseInt(process.env.MAX_CHECKPOINTS ?? "10000", 10),
         },
+        usage: usageSummary,
         storage_mode: dbHealth.backend,
         storage_note: "Supports runtime backend switching between local SQLite and distributed PostgreSQL.",
         v2_systems: {
@@ -265,7 +358,7 @@ app.get("/health", async (_req: Request, res: Response) => {
 app.use((_req: Request, res: Response) => {
     res.status(404).json({
         error: "Not Found",
-        message: "Available endpoints: POST /mcp, GET /health",
+        message: "Available endpoints: POST /mcp, GET /health, GET /admin/usage",
         timestamp: new Date().toISOString(),
     });
 });
