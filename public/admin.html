@@ -3,592 +3,527 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AgentGuard MCP — Admin Console</title>
+  <title>AgentGuard MCP — Admin Console v3.1.0</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            brand: {
-              bg: '#0a0a0f',
-              card: '#111118',
-              border: '#1e1e2e',
-              green: '#00ff87',
-              darkgreen: '#00cc6a'
-            }
-          }
-        }
-      }
-    }
-  </script>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
   <style>
     body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #0a0a0f; color: #e2e8f0; }
-    font-mono { font-family: 'JetBrains Mono', monospace; }
+    .font-mono { font-family: 'JetBrains Mono', monospace; }
   </style>
 </head>
-<body class="min-h-screen bg-[#0a0a0f]">
-  <div id="root"></div>
-
-  <script type="text/babel">
-    const { useState, useEffect, useCallback } = React;
-
-    function AdminDashboard() {
-      const [serverUrl, setServerUrl] = useState(window.location.origin);
-      const [adminKey, setAdminKey] = useState('');
-      const [activeTab, setActiveTab] = useState('analytics');
-      const [loading, setLoading] = useState(false);
-      const [error, setError] = useState(null);
-      const [copiedKey, setCopiedKey] = useState(null);
-
-      const [usageStats, setUsageStats] = useState(null);
-      const [tenants, setTenants] = useState([]);
-      const [apiKeys, setApiKeys] = useState([]);
-      const [circuits, setCircuits] = useState([]);
-      const [webhooks, setWebhooks] = useState([]);
-
-      const [newTenantId, setNewTenantId] = useState('');
-      const [newTenantName, setNewTenantName] = useState('');
-      const [newTenantPlan, setNewTenantPlan] = useState('pro');
-
-      const [keyTenantId, setKeyTenantId] = useState('default-tenant');
-      const [keyName, setKeyName] = useState('');
-      const [generatedRawKey, setGeneratedRawKey] = useState(null);
-
-      const [webhookUrl, setWebhookUrl] = useState('');
-      const [webhookTenant, setWebhookTenant] = useState('default-tenant');
-
-      const fetchData = useCallback(async () => {
-        setLoading(true);
-        setError(null);
-        const headers = { 'Content-Type': 'application/json' };
-        if (adminKey) headers['Authorization'] = `Bearer ${adminKey}`;
-
-        try {
-          const [usageRes, tenantsRes, keysRes, circuitsRes, webhooksRes] = await Promise.all([
-            fetch(`${serverUrl}/admin/usage`, { headers }).catch(() => null),
-            fetch(`${serverUrl}/admin/tenants`, { headers }).catch(() => null),
-            fetch(`${serverUrl}/admin/api-keys`, { headers }).catch(() => null),
-            fetch(`${serverUrl}/admin/circuits`, { headers }).catch(() => null),
-            fetch(`${serverUrl}/admin/webhooks`, { headers }).catch(() => null),
-          ]);
-
-          if (usageRes && usageRes.ok) setUsageStats(await usageRes.json());
-          if (tenantsRes && tenantsRes.ok) {
-            const d = await tenantsRes.json();
-            setTenants(d.tenants || []);
-          }
-          if (keysRes && keysRes.ok) {
-            const d = await keysRes.json();
-            setApiKeys(d.api_keys || []);
-          }
-          if (circuitsRes && circuitsRes.ok) {
-            const d = await circuitsRes.json();
-            setCircuits(d.circuits || []);
-          }
-          if (webhooksRes && webhooksRes.ok) {
-            const d = await webhooksRes.json();
-            setWebhooks(d.webhooks || []);
-          }
-        } catch (err) {
-          setError(err.message || 'Failed to connect to AgentGuard MCP server.');
-        } finally {
-          setLoading(false);
-        }
-      }, [serverUrl, adminKey]);
-
-      useEffect(() => {
-        fetchData();
-        const interval = setInterval(fetchData, 10000);
-        return () => clearInterval(interval);
-      }, [fetchData]);
-
-      const handleCreateTenant = async (e) => {
-        e.preventDefault();
-        if (!newTenantId || !newTenantName) return;
-        try {
-          const res = await fetch(`${serverUrl}/admin/tenants`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
-            body: JSON.stringify({ tenant_id: newTenantId, name: newTenantName, plan: newTenantPlan }),
-          });
-          if (res.ok) {
-            setNewTenantId('');
-            setNewTenantName('');
-            fetchData();
-          }
-        } catch (err) { console.error(err); }
-      };
-
-      const handleCreateApiKey = async (e) => {
-        e.preventDefault();
-        if (!keyTenantId) return;
-        try {
-          const res = await fetch(`${serverUrl}/admin/api-keys`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
-            body: JSON.stringify({ tenant_id: keyTenantId, name: keyName || 'New Key' }),
-          });
-          if (res.ok) {
-            const d = await res.json();
-            setGeneratedRawKey(d.api_key);
-            setKeyName('');
-            fetchData();
-          }
-        } catch (err) { console.error(err); }
-      };
-
-      const handleRevokeKey = async (id) => {
-        try {
-          await fetch(`${serverUrl}/admin/api-keys/${id}`, {
-            method: 'DELETE',
-            headers: { ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
-          });
-          fetchData();
-        } catch (err) { console.error(err); }
-      };
-
-      const handleResetCircuit = async (circuitName) => {
-        try {
-          const headers = { 'Content-Type': 'application/json', ...(adminKey && { Authorization: `Bearer ${adminKey}` }) };
-          await fetch(`${serverUrl}/admin/circuits/${encodeURIComponent(circuitName)}/reset`, {
-            method: 'POST',
-            headers,
-          });
-          fetchData();
-        } catch (err) { console.error(err); }
-      };
-
-      const handleCreateWebhook = async (e) => {
-        e.preventDefault();
-        if (!webhookUrl) return;
-        try {
-          await fetch(`${serverUrl}/admin/webhooks`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
-            body: JSON.stringify({ tenant_id: webhookTenant, url: webhookUrl, events: ['circuit.tripped', 'anomaly.detected', 'quota.warning'] }),
-          });
-          setWebhookUrl('');
-          fetchData();
-        } catch (err) { console.error(err); }
-      };
-
-      const handleDeleteWebhook = async (id) => {
-        try {
-          await fetch(`${serverUrl}/admin/webhooks/${id}`, {
-            method: 'DELETE',
-            headers: { ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
-          });
-          fetchData();
-        } catch (err) { console.error(err); }
-      };
-
-      const copyToClipboard = (text) => {
-        navigator.clipboard.writeText(text);
-        setCopiedKey(text);
-        setTimeout(() => setCopiedKey(null), 2000);
-      };
-
-      const totalCalls = usageStats?.total_calls || (usageStats?.tenants ? usageStats.tenants.reduce((acc, t) => acc + t.total_calls, 0) : 0);
-      const openCircuits = circuits.filter((c) => c.state === 'OPEN').length;
-
-      return (
-        <div className="max-w-7xl mx-auto px-6 py-10">
-          {/* Header Bar */}
-          <div className="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-2xl">
-            <div>
-              <div className="flex items-center gap-3 mb-1">
-                <span className="w-3 h-3 rounded-full bg-[#00ff87] animate-pulse" />
-                <h1 className="text-2xl font-extrabold text-white tracking-tight flex items-center gap-2">
-                  AgentGuard MCP Admin Console
-                  <span className="text-xs font-mono bg-[#00ff87]/10 text-[#00ff87] border border-[#00ff87]/30 px-2 py-0.5 rounded">
-                    v3.1.0 Live
-                  </span>
-                </h1>
-              </div>
-              <p className="text-slate-400 text-sm">
-                Standalone enterprise console for API keys, tenant rate limits, tool circuits, and webhooks.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center bg-[#0a0a0f] border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-slate-300 font-mono">
-                <span className="text-slate-500 mr-2">Host:</span>
-                <input
-                  type="text"
-                  value={serverUrl}
-                  onChange={(e) => setServerUrl(e.target.value)}
-                  className="bg-transparent border-none text-white focus:outline-none w-44"
-                />
-              </div>
-
-              <div className="flex items-center bg-[#0a0a0f] border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-slate-300 font-mono">
-                <span className="text-slate-500 mr-2">Key:</span>
-                <input
-                  type="password"
-                  value={adminKey}
-                  onChange={(e) => setAdminKey(e.target.value)}
-                  className="bg-transparent border-none text-white focus:outline-none w-36"
-                  placeholder="Admin Key"
-                />
-              </div>
-
-              <button
-                onClick={fetchData}
-                disabled={loading}
-                className="px-4 py-2 rounded-xl bg-[#00ff87]/10 border border-[#00ff87]/30 text-[#00ff87] hover:bg-[#00ff87]/20 transition-all text-xs font-semibold"
-              >
-                {loading ? 'Syncing…' : 'Sync'}
-              </button>
-            </div>
-          </div>
-
-          {/* 4 Stat Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            <div className="bg-[#111118] border border-[#1e1e2e] p-5 rounded-2xl">
-              <div className="text-slate-400 text-xs font-mono mb-2">TOTAL TOOL CALLS</div>
-              <div className="text-3xl font-black text-white font-mono">{totalCalls.toLocaleString()}</div>
-              <div className="text-[11px] text-slate-500 mt-1 font-mono">Month ({new Date().toISOString().slice(0, 7)})</div>
-            </div>
-
-            <div className="bg-[#111118] border border-[#1e1e2e] p-5 rounded-2xl">
-              <div className="text-slate-400 text-xs font-mono mb-2">TRACKED CIRCUITS</div>
-              <div className="text-3xl font-black text-white font-mono flex items-center gap-2">
-                {circuits.length}
-                {openCircuits > 0 && (
-                  <span className="text-xs font-bold text-red-400 bg-red-500/20 border border-red-500/40 px-2 py-0.5 rounded-full">
-                    {openCircuits} OPEN
-                  </span>
-                )}
-              </div>
-              <div className="text-[11px] text-slate-500 mt-1 font-mono">Auto trip threshold: 5</div>
-            </div>
-
-            <div className="bg-[#111118] border border-[#1e1e2e] p-5 rounded-2xl">
-              <div className="text-slate-400 text-xs font-mono mb-2">TENANTS</div>
-              <div className="text-3xl font-black text-white font-mono">{tenants.length || 1}</div>
-              <div className="text-[11px] text-slate-500 mt-1 font-mono">Multi-tenant isolation active</div>
-            </div>
-
-            <div className="bg-[#111118] border border-[#1e1e2e] p-5 rounded-2xl">
-              <div className="text-slate-400 text-xs font-mono mb-2">LATENCY</div>
-              <div className="text-3xl font-black text-white font-mono">
-                {usageStats?.avg_response_time_ms ? `${usageStats.avg_response_time_ms.toFixed(1)}ms` : '< 10ms'}
-              </div>
-              <div className="text-[11px] text-slate-500 mt-1 font-mono">SQLite WAL mode</div>
-            </div>
-          </div>
-
-          {/* Navigation Tabs */}
-          <div className="flex items-center border-b border-[#1e1e2e] mb-8 gap-2">
-            <button
-              onClick={() => setActiveTab('analytics')}
-              className={`px-5 py-3 text-sm font-semibold transition-all border-b-2 ${
-                activeTab === 'analytics' ? 'border-[#00ff87] text-[#00ff87] bg-[#00ff87]/5' : 'border-transparent text-slate-400 hover:text-white'
-              }`}
-            >
-              Usage &amp; Analytics
-            </button>
-            <button
-              onClick={() => setActiveTab('keys')}
-              className={`px-5 py-3 text-sm font-semibold transition-all border-b-2 ${
-                activeTab === 'keys' ? 'border-[#00ff87] text-[#00ff87] bg-[#00ff87]/5' : 'border-transparent text-slate-400 hover:text-white'
-              }`}
-            >
-              API Keys &amp; Tenants
-            </button>
-            <button
-              onClick={() => setActiveTab('circuits')}
-              className={`px-5 py-3 text-sm font-semibold transition-all border-b-2 ${
-                activeTab === 'circuits' ? 'border-[#00ff87] text-[#00ff87] bg-[#00ff87]/5' : 'border-transparent text-slate-400 hover:text-white'
-              }`}
-            >
-              Circuit Breakers ({circuits.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('webhooks')}
-              className={`px-5 py-3 text-sm font-semibold transition-all border-b-2 ${
-                activeTab === 'webhooks' ? 'border-[#00ff87] text-[#00ff87] bg-[#00ff87]/5' : 'border-transparent text-slate-400 hover:text-white'
-              }`}
-            >
-              Webhooks ({webhooks.length})
-            </button>
-          </div>
-
-          {/* Tab 1: Analytics */}
-          {activeTab === 'analytics' && (
-            <div className="space-y-8">
-              <div className="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-                <h3 className="text-lg font-bold text-white mb-4">Tool Call Frequencies</h3>
-                {usageStats?.calls_by_tool && usageStats.calls_by_tool.length > 0 ? (
-                  <div className="space-y-3">
-                    {usageStats.calls_by_tool.map((t) => {
-                      const percent = Math.round((t.count / (totalCalls || 1)) * 100);
-                      return (
-                        <div key={t.tool_name} className="space-y-1">
-                          <div className="flex justify-between text-xs font-mono text-slate-300">
-                            <span className="font-bold text-[#00ff87]">{t.tool_name}</span>
-                            <span>{t.count} calls ({percent}%)</span>
-                          </div>
-                          <div className="w-full bg-[#0a0a0f] rounded-full h-2 overflow-hidden border border-white/5">
-                            <div className="bg-[#00ff87] h-full rounded-full" style={{ width: `${percent}%` }} />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="text-slate-500 text-sm font-mono italic py-6 text-center">
-                    No calls recorded yet for this month.
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Tab 2: API Keys */}
-          {activeTab === 'keys' && (
-            <div className="space-y-8">
-              {generatedRawKey && (
-                <div className="bg-[#00ff87]/10 border-2 border-[#00ff87] rounded-2xl p-6 mb-6">
-                  <div className="text-[#00ff87] font-mono text-xs font-bold uppercase tracking-wider mb-2">
-                    🔑 API Key Generated — Save This Key Now!
-                  </div>
-                  <div className="flex items-center justify-between bg-[#0a0a0f] border border-[#00ff87]/40 rounded-xl p-3 font-mono text-sm text-[#00ff87]">
-                    <span className="truncate mr-4">{generatedRawKey}</span>
-                    <button
-                      onClick={() => copyToClipboard(generatedRawKey)}
-                      className="px-3 py-1.5 rounded-lg bg-[#00ff87] text-black font-bold text-xs"
-                    >
-                      {copiedKey === generatedRawKey ? 'Copied!' : 'Copy Key'}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-                  <h3 className="text-base font-bold text-white mb-4">Create Tenant</h3>
-                  <form onSubmit={handleCreateTenant} className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-mono text-slate-400 mb-1">Tenant ID</label>
-                      <input
-                        type="text" required placeholder="e.g. acme-corp"
-                        value={newTenantId} onChange={(e) => setNewTenantId(e.target.value)}
-                        className="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-mono text-slate-400 mb-1">Name</label>
-                      <input
-                        type="text" required placeholder="e.g. Acme Inc"
-                        value={newTenantName} onChange={(e) => setNewTenantName(e.target.value)}
-                        className="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-mono text-slate-400 mb-1">Plan</label>
-                      <select
-                        value={newTenantPlan} onChange={(e) => setNewTenantPlan(e.target.value)}
-                        className="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono"
-                      >
-                        <option value="free">Free (1k calls/mo)</option>
-                        <option value="starter">Starter (50k calls/mo)</option>
-                        <option value="pro">Pro (500k calls/mo)</option>
-                        <option value="team">Team (5M calls/mo)</option>
-                      </select>
-                    </div>
-                    <button type="submit" className="w-full py-2.5 rounded-xl bg-cyan-500 text-black font-bold text-sm">
-                      Create Tenant
-                    </button>
-                  </form>
-                </div>
-
-                <div className="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-                  <h3 className="text-base font-bold text-white mb-4">Generate API Key</h3>
-                  <form onSubmit={handleCreateApiKey} className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-mono text-slate-400 mb-1">Tenant</label>
-                      <select
-                        value={keyTenantId} onChange={(e) => setKeyTenantId(e.target.value)}
-                        className="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono"
-                      >
-                        {tenants.map((t) => (
-                          <option key={t.tenant_id} value={t.tenant_id}>{t.name} ({t.tenant_id})</option>
-                        ))}
-                        {tenants.length === 0 && <option value="default-tenant">Default Tenant</option>}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-mono text-slate-400 mb-1">Description</label>
-                      <input
-                        type="text" placeholder="e.g. Production Key"
-                        value={keyName} onChange={(e) => setKeyName(e.target.value)}
-                        className="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white"
-                      />
-                    </div>
-                    <button type="submit" className="w-full py-2.5 rounded-xl bg-[#00ff87] text-black font-bold text-sm">
-                      Generate Key
-                    </button>
-                  </form>
-                </div>
-              </div>
-
-              <div className="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-                <h3 className="text-lg font-bold text-white mb-4">Active API Keys</h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs font-mono text-slate-300">
-                    <thead className="bg-[#0a0a0f] text-slate-400 border-b border-[#1e1e2e]">
-                      <tr>
-                        <th className="p-3">Prefix</th>
-                        <th className="p-3">Label</th>
-                        <th className="p-3">Tenant</th>
-                        <th className="p-3 text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {apiKeys.map((k) => (
-                        <tr key={k.id} className="border-b border-[#1e1e2e]/50">
-                          <td className="p-3 font-bold text-[#00ff87]">{k.prefix}</td>
-                          <td className="p-3 text-white">{k.name}</td>
-                          <td className="p-3">{k.tenant_id}</td>
-                          <td className="p-3 text-right">
-                            <button
-                              onClick={() => handleRevokeKey(k.id)}
-                              className="px-2.5 py-1 rounded bg-red-500/10 text-red-400 border border-red-500/30 text-[11px]"
-                            >
-                              Revoke
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                      {apiKeys.length === 0 && (
-                        <tr><td colSpan={4} className="p-6 text-center text-slate-500 italic">No API keys found.</td></tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Tab 3: Circuits */}
-          {activeTab === 'circuits' && (
-            <div className="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-              <h3 className="text-lg font-bold text-white mb-6">Circuit Breakers Live Status Grid</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {circuits.map((c) => (
-                  <div key={c.name} className="bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl p-5 flex flex-col justify-between">
-                    <div>
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="font-mono text-xs font-bold text-white truncate max-w-[180px]">{c.name}</span>
-                        <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold uppercase border ${
-                          c.state === 'CLOSED' ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30'
-                        }`}>
-                          {c.state}
-                        </span>
-                      </div>
-                      <div className="space-y-1.5 text-xs font-mono text-slate-400 mb-4">
-                        <div className="flex justify-between">
-                          <span>Failures:</span>
-                          <span className={c.failure_count > 0 ? 'text-red-400 font-bold' : 'text-slate-300'}>{c.failure_count} / 5</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Successes:</span>
-                          <span className="text-slate-300">{c.success_count}</span>
-                        </div>
-                      </div>
-                    </div>
-                    {c.state !== 'CLOSED' && (
-                      <button
-                        onClick={() => handleResetCircuit(c.name)}
-                        className="w-full py-1.5 rounded bg-brand-green/10 text-brand-green border border-brand-green/30 hover:bg-brand-green/20 text-xs font-semibold font-mono"
-                      >
-                        Reset Circuit
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Tab 4: Webhooks */}
-          {activeTab === 'webhooks' && (
-            <div className="space-y-8">
-              <div className="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-                <h3 className="text-base font-bold text-white mb-4">Subscribe Webhook</h3>
-                <form onSubmit={handleCreateWebhook} className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-xs font-mono text-slate-400 mb-1">Tenant</label>
-                    <select
-                      value={webhookTenant} onChange={(e) => setWebhookTenant(e.target.value)}
-                      className="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono"
-                    >
-                      {tenants.map((t) => (
-                        <option key={t.tenant_id} value={t.tenant_id}>{t.name} ({t.tenant_id})</option>
-                      ))}
-                      {tenants.length === 0 && <option value="default-tenant">Default Tenant</option>}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-mono text-slate-400 mb-1">URL</label>
-                    <input
-                      type="url" required placeholder="https://api.yourdomain.com/webhooks"
-                      value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)}
-                      className="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono"
-                    />
-                  </div>
-                  <button type="submit" className="py-2.5 rounded-xl bg-purple-500 text-white font-bold text-sm">
-                    Add Webhook
-                  </button>
-                </form>
-              </div>
-
-              <div className="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
-                <h3 className="text-lg font-bold text-white mb-4">Active Webhooks</h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs font-mono text-slate-300">
-                    <thead className="bg-[#0a0a0f] text-slate-400 border-b border-[#1e1e2e]">
-                      <tr>
-                        <th className="p-3">ID</th>
-                        <th className="p-3">Tenant</th>
-                        <th className="p-3">URL</th>
-                        <th className="p-3 text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {webhooks.map((w) => (
-                        <tr key={w.id} className="border-b border-[#1e1e2e]/50">
-                          <td className="p-3 font-bold text-purple-400">{w.id}</td>
-                          <td className="p-3 text-white">{w.tenant_id}</td>
-                          <td className="p-3 text-slate-300 truncate max-w-xs">{w.url}</td>
-                          <td className="p-3 text-right">
-                            <button
-                              onClick={() => handleDeleteWebhook(w.id)}
-                              className="px-2.5 py-1 rounded bg-red-500/10 text-red-400 border border-red-500/30 text-[11px]"
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
+<body class="min-h-screen bg-[#0a0a0f] p-6 text-slate-200">
+  <div class="max-w-7xl mx-auto">
+    
+    <!-- Top Header Bar -->
+    <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-2xl">
+      <div>
+        <div class="flex items-center gap-3 mb-1">
+          <span class="w-3 h-3 rounded-full bg-[#00ff87] animate-pulse"></span>
+          <h1 class="text-2xl font-extrabold text-white tracking-tight flex items-center gap-2">
+            AgentGuard MCP Admin Console
+            <span className="text-xs font-mono bg-[#00ff87]/10 text-[#00ff87] border border-[#00ff87]/30 px-2 py-0.5 rounded">
+              v3.1.0 Live
+            </span>
+          </h1>
         </div>
-      );
+        <p class="text-slate-400 text-sm">
+          Enterprise operational dashboard for API keys, rate limits, tool circuit breakers, and webhooks.
+        </p>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-3">
+        <div class="flex items-center bg-[#0a0a0f] border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-slate-300 font-mono">
+          <span class="text-slate-500 mr-2">Host:</span>
+          <input id="serverUrlInput" type="text" value="" class="bg-transparent border-none text-white focus:outline-none w-48" />
+        </div>
+
+        <div class="flex items-center bg-[#0a0a0f] border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-slate-300 font-mono">
+          <span class="text-slate-500 mr-2">Key:</span>
+          <input id="adminKeyInput" type="password" value="" placeholder="Admin Secret Key" class="bg-transparent border-none text-white focus:outline-none w-36" />
+        </div>
+
+        <button onclick="fetchData()" class="px-4 py-2 rounded-xl bg-[#00ff87]/10 border border-[#00ff87]/30 text-[#00ff87] hover:bg-[#00ff87]/20 transition-all text-xs font-semibold font-mono">
+          🔄 Sync Data
+        </button>
+      </div>
+    </div>
+
+    <!-- Error Alert Banner -->
+    <div id="errorAlert" class="hidden bg-red-500/10 border border-red-500/30 text-red-400 p-4 rounded-xl text-sm mb-6 font-mono"></div>
+
+    <!-- Top 4 Metric Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <div class="bg-[#111118] border border-[#1e1e2e] p-5 rounded-2xl">
+        <div class="text-slate-400 text-xs font-mono mb-2">TOTAL TOOL CALLS</div>
+        <div id="statTotalCalls" class="text-3xl font-black text-white font-mono">0</div>
+        <div class="text-[11px] text-slate-500 mt-1 font-mono">Current Month</div>
+      </div>
+
+      <div class="bg-[#111118] border border-[#1e1e2e] p-5 rounded-2xl">
+        <div class="text-slate-400 text-xs font-mono mb-2">TRACKED CIRCUITS</div>
+        <div id="statCircuits" class="text-3xl font-black text-white font-mono">0</div>
+        <div class="text-[11px] text-slate-500 mt-1 font-mono">Threshold: 5 failures → OPEN</div>
+      </div>
+
+      <div class="bg-[#111118] border border-[#1e1e2e] p-5 rounded-2xl">
+        <div class="text-slate-400 text-xs font-mono mb-2">REGISTERED TENANTS</div>
+        <div id="statTenants" class="text-3xl font-black text-white font-mono">0</div>
+        <div class="text-[11px] text-slate-500 mt-1 font-mono">Isolated database state</div>
+      </div>
+
+      <div class="bg-[#111118] border border-[#1e1e2e] p-5 rounded-2xl">
+        <div class="text-slate-400 text-xs font-mono mb-2">AVG LATENCY</div>
+        <div id="statLatency" class="text-3xl font-black text-white font-mono">&lt; 10ms</div>
+        <div class="text-[11px] text-slate-500 mt-1 font-mono">SQLite WAL mode</div>
+      </div>
+    </div>
+
+    <!-- Generated Key Notification -->
+    <div id="generatedKeyBox" class="hidden bg-[#00ff87]/10 border-2 border-[#00ff87] rounded-2xl p-6 mb-8 shadow-2xl">
+      <div class="text-[#00ff87] font-mono text-xs font-bold uppercase tracking-wider mb-2">
+        🔑 New Hashed API Key Created — Save This Key Immediately!
+      </div>
+      <div class="flex items-center justify-between bg-[#0a0a0f] border border-[#00ff87]/40 rounded-xl p-3 font-mono text-sm text-[#00ff87]">
+        <span id="rawKeyDisplay" class="truncate mr-4"></span>
+        <button onclick="copyGeneratedKey()" class="px-3 py-1.5 rounded-lg bg-[#00ff87] text-black font-bold text-xs">
+          Copy Raw Key
+        </button>
+      </div>
+    </div>
+
+    <!-- Tab Buttons -->
+    <div class="flex items-center border-b border-[#1e1e2e] mb-8 gap-2">
+      <button id="tabBtnAnalytics" onclick="switchTab('analytics')" class="px-5 py-3 text-sm font-semibold transition-all border-b-2 border-[#00ff87] text-[#00ff87] bg-[#00ff87]/5">
+        📊 Usage Analytics
+      </button>
+      <button id="tabBtnKeys" onclick="switchTab('keys')" class="px-5 py-3 text-sm font-semibold transition-all border-b-2 border-transparent text-slate-400 hover:text-white">
+        🔑 API Keys &amp; Tenants
+      </button>
+      <button id="tabBtnCircuits" onclick="switchTab('circuits')" class="px-5 py-3 text-sm font-semibold transition-all border-b-2 border-transparent text-slate-400 hover:text-white">
+        ⚡ Circuit Breakers
+      </button>
+      <button id="tabBtnWebhooks" onclick="switchTab('webhooks')" class="px-5 py-3 text-sm font-semibold transition-all border-b-2 border-transparent text-slate-400 hover:text-white">
+        🔔 Webhooks
+      </button>
+    </div>
+
+    <!-- Tab 1: Usage Analytics -->
+    <div id="tabAnalytics" class="space-y-8">
+      <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
+        <h3 class="text-lg font-bold text-white mb-4">Tool Invocation Frequency</h3>
+        <div id="toolBarsContainer" class="space-y-3">
+          <div class="text-slate-500 text-sm font-mono italic py-4 text-center">Loading analytics...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 2: API Keys & Tenants -->
+    <div id="tabKeys" class="hidden space-y-8">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        
+        <!-- Create Tenant Form -->
+        <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
+          <h3 class="text-base font-bold text-white mb-4">Create New Tenant</h3>
+          <form onsubmit="handleCreateTenant(event)" class="space-y-4">
+            <div>
+              <label class="block text-xs font-mono text-slate-400 mb-1">Tenant ID</label>
+              <input id="inputTenantId" type="text" required placeholder="e.g. acme-corp" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono" />
+            </div>
+            <div>
+              <label class="block text-xs font-mono text-slate-400 mb-1">Company / Team Name</label>
+              <input id="inputTenantName" type="text" required placeholder="e.g. Acme Corporation" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white" />
+            </div>
+            <div>
+              <label class="block text-xs font-mono text-slate-400 mb-1">Subscription Plan</label>
+              <select id="inputTenantPlan" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono">
+                <option value="free">Free (1,000 calls/mo)</option>
+                <option value="starter">Starter (50,000 calls/mo)</option>
+                <option value="pro" selected>Pro (500,000 calls/mo)</option>
+                <option value="team">Team (5,000,000 calls/mo)</option>
+              </select>
+            </div>
+            <button type="submit" class="w-full py-2.5 rounded-xl bg-cyan-500 text-black font-bold text-sm hover:bg-cyan-400">
+              Create Tenant
+            </button>
+          </form>
+        </div>
+
+        <!-- Generate API Key Form -->
+        <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
+          <h3 class="text-base font-bold text-white mb-4">Generate Live API Key</h3>
+          <form onsubmit="handleCreateApiKey(event)" class="space-y-4">
+            <div>
+              <label class="block text-xs font-mono text-slate-400 mb-1">Assign to Tenant</label>
+              <select id="selectKeyTenant" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono">
+                <option value="default-tenant">Default Tenant</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-mono text-slate-400 mb-1">Key Description</label>
+              <input id="inputKeyName" type="text" placeholder="e.g. Production Agent Key" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white" />
+            </div>
+            <button type="submit" class="w-full py-2.5 rounded-xl bg-[#00ff87] text-black font-bold text-sm hover:bg-[#00cc6a]">
+              Generate Key
+            </button>
+          </form>
+        </div>
+
+      </div>
+
+      <!-- API Keys Table -->
+      <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
+        <h3 class="text-lg font-bold text-white mb-4">Active API Keys</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs font-mono text-slate-300">
+            <thead class="bg-[#0a0a0f] text-slate-400 border-b border-[#1e1e2e]">
+              <tr>
+                <th class="p-3">Prefix</th>
+                <th class="p-3">Name</th>
+                <th class="p-3">Tenant ID</th>
+                <th class="p-3">Created</th>
+                <th class="p-3 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody id="apiKeysTableBody">
+              <tr><td colSpan="5" class="p-6 text-center text-slate-500 italic">No API keys found.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 3: Circuit Breakers Grid -->
+    <div id="tabCircuits" class="hidden bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
+      <h3 class="text-lg font-bold text-white mb-6">Circuit Breakers Status Grid</h3>
+      <div id="circuitsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div class="text-slate-500 text-sm font-mono italic py-4 col-span-3 text-center">Loading circuits...</div>
+      </div>
+    </div>
+
+    <!-- Tab 4: Webhooks -->
+    <div id="tabWebhooks" class="hidden space-y-8">
+      <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
+        <h3 class="text-base font-bold text-white mb-4">Subscribe New Outbound Webhook</h3>
+        <form onsubmit="handleCreateWebhook(event)" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+          <div>
+            <label class="block text-xs font-mono text-slate-400 mb-1">Tenant</label>
+            <select id="selectWebhookTenant" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono">
+              <option value="default-tenant">Default Tenant</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-mono text-slate-400 mb-1">Webhook Target URL</label>
+            <input id="inputWebhookUrl" type="url" required placeholder="https://api.yourdomain.com/webhooks" class="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white font-mono" />
+          </div>
+          <button type="submit" class="py-2.5 rounded-xl bg-purple-500 text-white font-bold text-sm hover:bg-purple-400">
+            Add Webhook
+          </button>
+        </form>
+      </div>
+
+      <div class="bg-[#111118] border border-[#1e1e2e] rounded-2xl p-6">
+        <h3 class="text-lg font-bold text-white mb-4">Active Webhooks</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs font-mono text-slate-300">
+            <thead class="bg-[#0a0a0f] text-slate-400 border-b border-[#1e1e2e]">
+              <tr>
+                <th class="p-3">ID</th>
+                <th class="p-3">Tenant</th>
+                <th class="p-3">URL</th>
+                <th class="p-3 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody id="webhooksTableBody">
+              <tr><td colSpan="4" class="p-6 text-center text-slate-500 italic">No webhooks configured.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // Set Host default URL
+    document.getElementById('serverUrlInput').value = window.location.origin;
+
+    let currentTab = 'analytics';
+
+    function switchTab(tabName) {
+      currentTab = tabName;
+      ['analytics', 'keys', 'circuits', 'webhooks'].forEach(t => {
+        const tabEl = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
+        const btnEl = document.getElementById('tabBtn' + t.charAt(0).toUpperCase() + t.slice(1));
+        if (t === tabName) {
+          tabEl.classList.remove('hidden');
+          btnEl.className = 'px-5 py-3 text-sm font-semibold transition-all border-b-2 border-[#00ff87] text-[#00ff87] bg-[#00ff87]/5';
+        } else {
+          tabEl.classList.add('hidden');
+          btnEl.className = 'px-5 py-3 text-sm font-semibold transition-all border-b-2 border-transparent text-slate-400 hover:text-white';
+        }
+      });
     }
 
-    ReactDOM.render(<AdminDashboard />, document.getElementById('root'));
+    async function fetchData() {
+      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
+      const adminKey = document.getElementById('adminKeyInput').value.trim();
+      const headers = { 'Content-Type': 'application/json' };
+      if (adminKey) headers['Authorization'] = `Bearer ${adminKey}`;
+
+      const errorAlert = document.getElementById('errorAlert');
+      errorAlert.classList.add('hidden');
+
+      try {
+        const [usageRes, tenantsRes, keysRes, circuitsRes, webhooksRes] = await Promise.all([
+          fetch(`${serverUrl}/admin/usage`, { headers }).catch(() => null),
+          fetch(`${serverUrl}/admin/tenants`, { headers }).catch(() => null),
+          fetch(`${serverUrl}/admin/api-keys`, { headers }).catch(() => null),
+          fetch(`${serverUrl}/admin/circuits`, { headers }).catch(() => null),
+          fetch(`${serverUrl}/admin/webhooks`, { headers }).catch(() => null),
+        ]);
+
+        // 1. Render Usage & Stats
+        if (usageRes && usageRes.ok) {
+          const usage = await usageRes.json();
+          const totalCalls = usage.total_calls || (usage.tenants ? usage.tenants.reduce((acc, t) => acc + t.total_calls, 0) : 0);
+          document.getElementById('statTotalCalls').innerText = totalCalls.toLocaleString();
+          document.getElementById('statLatency').innerText = usage.avg_response_time_ms ? `${usage.avg_response_time_ms.toFixed(1)}ms` : '< 10ms';
+
+          const toolBarsContainer = document.getElementById('toolBarsContainer');
+          if (usage.calls_by_tool && usage.calls_by_tool.length > 0) {
+            toolBarsContainer.innerHTML = usage.calls_by_tool.map(t => {
+              const percent = Math.round((t.count / (totalCalls || 1)) * 100);
+              return `
+                <div class="space-y-1">
+                  <div class="flex justify-between text-xs font-mono text-slate-300">
+                    <span class="font-bold text-[#00ff87]">${t.tool_name}</span>
+                    <span>${t.count} calls (${percent}%)</span>
+                  </div>
+                  <div class="w-full bg-[#0a0a0f] rounded-full h-2 overflow-hidden border border-white/5">
+                    <div class="bg-[#00ff87] h-full rounded-full" style="width: ${percent}%"></div>
+                  </div>
+                </div>
+              `;
+            }).join('');
+          } else {
+            toolBarsContainer.innerHTML = '<div class="text-slate-500 text-sm font-mono italic py-4 text-center">No tool call data recorded for this month yet.</div>';
+          }
+        }
+
+        // 2. Render Tenants
+        let tenantsList = [];
+        if (tenantsRes && tenantsRes.ok) {
+          const d = await tenantsRes.json();
+          tenantsList = d.tenants || [];
+          document.getElementById('statTenants').innerText = tenantsList.length || 1;
+
+          const tenantOptionsHtml = tenantsList.map(t => `<option value="${t.tenant_id}">${t.name} (${t.tenant_id}) — ${t.plan.toUpperCase()}</option>`).join('');
+          document.getElementById('selectKeyTenant').innerHTML = tenantOptionsHtml || '<option value="default-tenant">Default Tenant</option>';
+          document.getElementById('selectWebhookTenant').innerHTML = tenantOptionsHtml || '<option value="default-tenant">Default Tenant</option>';
+        }
+
+        // 3. Render API Keys
+        if (keysRes && keysRes.ok) {
+          const d = await keysRes.json();
+          const keys = d.api_keys || [];
+          const tbody = document.getElementById('apiKeysTableBody');
+          if (keys.length > 0) {
+            tbody.innerHTML = keys.map(k => `
+              <tr class="border-b border-[#1e1e2e]/50 hover:bg-white/5">
+                <td class="p-3 font-bold text-[#00ff87]">${k.prefix}</td>
+                <td class="p-3 text-white">${k.name}</td>
+                <td class="p-3">${k.tenant_id}</td>
+                <td class="p-3 text-slate-400">${k.created_at ? k.created_at.slice(0, 10) : ''}</td>
+                <td class="p-3 text-right">
+                  <button onclick="handleRevokeKey('${k.id}')" class="px-2.5 py-1 rounded bg-red-500/10 text-red-400 border border-red-500/30 text-[11px]">
+                    Revoke
+                  </button>
+                </td>
+              </tr>
+            `).join('');
+          } else {
+            tbody.innerHTML = '<tr><td colSpan="5" class="p-6 text-center text-slate-500 italic">No API keys found. Generate a key above.</td></tr>';
+          }
+        }
+
+        // 4. Render Circuits
+        if (circuitsRes && circuitsRes.ok) {
+          const d = await circuitsRes.json();
+          const circuits = d.circuits || [];
+          const openCount = circuits.filter(c => c.state === 'OPEN').length;
+          document.getElementById('statCircuits').innerHTML = `${circuits.length} ${openCount > 0 ? `<span class="text-xs text-red-400 font-bold bg-red-500/20 px-2 py-0.5 rounded-full ml-1">${openCount} OPEN</span>` : ''}`;
+
+          const grid = document.getElementById('circuitsGrid');
+          if (circuits.length > 0) {
+            grid.innerHTML = circuits.map(c => `
+              <div class="bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl p-5 flex flex-col justify-between">
+                <div>
+                  <div class="flex items-center justify-between mb-3">
+                    <span class="font-mono text-xs font-bold text-white truncate max-w-[180px]">${c.name}</span>
+                    <span class="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold uppercase border ${c.state === 'CLOSED' ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30 animate-pulse'}">
+                      ${c.state}
+                    </span>
+                  </div>
+                  <div class="space-y-1.5 text-xs font-mono text-slate-400 mb-4">
+                    <div class="flex justify-between">
+                      <span>Failures:</span>
+                      <span class="${c.failure_count > 0 ? 'text-red-400 font-bold' : 'text-slate-300'}">${c.failure_count} / 5</span>
+                    </div>
+                    <div class="flex justify-between">
+                      <span>Successes:</span>
+                      <span class="text-slate-300">${c.success_count}</span>
+                    </div>
+                  </div>
+                </div>
+                ${c.state !== 'CLOSED' ? `
+                  <button onclick="handleResetCircuit('${encodeURIComponent(c.name)}')" class="w-full py-1.5 rounded bg-[#00ff87]/10 text-[#00ff87] border border-[#00ff87]/30 hover:bg-[#00ff87]/20 text-xs font-semibold font-mono">
+                    Reset Circuit
+                  </button>
+                ` : ''}
+              </div>
+            `).join('');
+          } else {
+            grid.innerHTML = '<div class="text-slate-500 text-sm font-mono italic py-4 col-span-3 text-center">No circuits tracked yet.</div>';
+          }
+        }
+
+        // 5. Render Webhooks
+        if (webhooksRes && webhooksRes.ok) {
+          const d = await webhooksRes.json();
+          const webhooks = d.webhooks || [];
+          const tbody = document.getElementById('webhooksTableBody');
+          if (webhooks.length > 0) {
+            tbody.innerHTML = webhooks.map(w => `
+              <tr class="border-b border-[#1e1e2e]/50">
+                <td class="p-3 font-bold text-purple-400">${w.id}</td>
+                <td class="p-3 text-white">${w.tenant_id}</td>
+                <td class="p-3 text-slate-300 truncate max-w-xs">${w.url}</td>
+                <td class="p-3 text-right">
+                  <button onclick="handleDeleteWebhook('${w.id}')" class="px-2.5 py-1 rounded bg-red-500/10 text-red-400 border border-red-500/30 text-[11px]">
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            `).join('');
+          } else {
+            tbody.innerHTML = '<tr><td colSpan="4" class="p-6 text-center text-slate-500 italic">No webhooks configured.</td></tr>';
+          }
+        }
+
+      } catch (err) {
+        errorAlert.innerText = 'Error connecting to server: ' + err.message;
+        errorAlert.classList.remove('hidden');
+      }
+    }
+
+    async function handleCreateTenant(e) {
+      e.preventDefault();
+      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
+      const adminKey = document.getElementById('adminKeyInput').value.trim();
+      const tenant_id = document.getElementById('inputTenantId').value.trim();
+      const name = document.getElementById('inputTenantName').value.trim();
+      const plan = document.getElementById('inputTenantPlan').value;
+
+      try {
+        const res = await fetch(`${serverUrl}/admin/tenants`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
+          body: JSON.stringify({ tenant_id, name, plan }),
+        });
+        if (res.ok) {
+          document.getElementById('inputTenantId').value = '';
+          document.getElementById('inputTenantName').value = '';
+          fetchData();
+        }
+      } catch (err) { alert('Failed to create tenant: ' + err.message); }
+    }
+
+    async function handleCreateApiKey(e) {
+      e.preventDefault();
+      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
+      const adminKey = document.getElementById('adminKeyInput').value.trim();
+      const tenant_id = document.getElementById('selectKeyTenant').value;
+      const name = document.getElementById('inputKeyName').value.trim() || 'New Key';
+
+      try {
+        const res = await fetch(`${serverUrl}/admin/api-keys`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
+          body: JSON.stringify({ tenant_id, name }),
+        });
+        if (res.ok) {
+          const d = await res.json();
+          document.getElementById('rawKeyDisplay').innerText = d.api_key;
+          document.getElementById('generatedKeyBox').classList.remove('hidden');
+          document.getElementById('inputKeyName').value = '';
+          fetchData();
+        }
+      } catch (err) { alert('Failed to create API key: ' + err.message); }
+    }
+
+    function copyGeneratedKey() {
+      const keyText = document.getElementById('rawKeyDisplay').innerText;
+      navigator.clipboard.writeText(keyText);
+      alert('API Key copied to clipboard!');
+    }
+
+    async function handleRevokeKey(id) {
+      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
+      const adminKey = document.getElementById('adminKeyInput').value.trim();
+      try {
+        await fetch(`${serverUrl}/admin/api-keys/${id}`, {
+          method: 'DELETE',
+          headers: { ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
+        });
+        fetchData();
+      } catch (err) { alert('Failed to revoke key: ' + err.message); }
+    }
+
+    async function handleResetCircuit(circuitName) {
+      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
+      const adminKey = document.getElementById('adminKeyInput').value.trim();
+      try {
+        await fetch(`${serverUrl}/admin/circuits/${circuitName}/reset`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
+        });
+        fetchData();
+      } catch (err) { alert('Failed to reset circuit: ' + err.message); }
+    }
+
+    async function handleCreateWebhook(e) {
+      e.preventDefault();
+      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
+      const adminKey = document.getElementById('adminKeyInput').value.trim();
+      const tenant_id = document.getElementById('selectWebhookTenant').value;
+      const url = document.getElementById('inputWebhookUrl').value.trim();
+
+      try {
+        await fetch(`${serverUrl}/admin/webhooks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
+          body: JSON.stringify({ tenant_id, url, events: ['circuit.tripped', 'anomaly.detected', 'quota.warning'] }),
+        });
+        document.getElementById('inputWebhookUrl').value = '';
+        fetchData();
+      } catch (err) { alert('Failed to add webhook: ' + err.message); }
+    }
+
+    async function handleDeleteWebhook(id) {
+      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
+      const adminKey = document.getElementById('adminKeyInput').value.trim();
+      try {
+        await fetch(`${serverUrl}/admin/webhooks/${id}`, {
+          method: 'DELETE',
+          headers: { ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
+        });
+        fetchData();
+      } catch (err) { alert('Failed to delete webhook: ' + err.message); }
+    }
+
+    // Initial fetch on load
+    fetchData();
+    setInterval(fetchData, 15000); // 15s clean polling
   </script>
 </body>
 </html>

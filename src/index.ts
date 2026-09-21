@@ -516,7 +516,7 @@ app.get("/health", async (_req: Request, res: Response) => {
 app.use((_req: Request, res: Response) => {
     res.status(404).json({
         error: "Not Found",
-        message: "Available endpoints: POST /mcp, GET /health, GET /admin/usage",
+        message: "Available endpoints: POST /mcp, GET /health, GET /admin (Admin Console UI), GET /admin/usage, GET /admin/tenants, GET /admin/api-keys, GET /admin/circuits, GET /admin/webhooks",
         timestamp: new Date().toISOString(),
     });
 });
@@ -539,12 +539,14 @@ const httpServer = app.listen(PORT, () => {
     console.log("┌─────────────────────────────────────────┐");
     console.log(`│       ${SERVER_NAME} v${SERVER_VERSION}           │`);
     console.log("├─────────────────────────────────────────┤");
-    console.log(`│  MCP endpoint : http://localhost:${PORT}/mcp  │`);
-    console.log(`│  Health check : http://localhost:${PORT}/health│`);
+    console.log(`│  MCP endpoint  : http://localhost:${PORT}/mcp │`);
+    console.log(`│  Admin Console : http://localhost:${PORT}/admin │`);
+    console.log(`│  Health check  : http://localhost:${PORT}/health│`);
     console.log("├─────────────────────────────────────────┤");
     console.log("│  Registered tools:                      │");
     REGISTERED_TOOLS.forEach((t) => console.log(`│    • ${t.padEnd(33)}│`));
     console.log("└─────────────────────────────────────────┘");
+
     console.log("");
     console.log(
         "[AgentGuard] ℹ️  Storage: SQLite WAL-mode (unified single-instance)."
