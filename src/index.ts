@@ -19,8 +19,9 @@ import { circuitBreakerTools } from "./tools/circuitBreaker.js";
 import { causalChainTools } from "./tools/causalChain.js";
 import { adaptiveBaselineTools } from "./tools/adaptiveBaseline.js";
 import { getStorageStats } from "./utils/storage.js";
-import { getAllCircuits } from "./utils/circuitStore.js";
+import { getAllCircuits, upsertCircuit } from "./utils/circuitStore.js";
 import { getBaselineStats } from "./utils/metricStore.js";
+
 import { initializeDatabase } from "./db/schema.js";
 import { authenticateRequest, tenantContextStorage, verifyAdminKey } from "./utils/auth.js";
 import { runDatabaseMaintenance } from "./utils/maintenance.js";
@@ -400,10 +401,27 @@ app.delete("/admin/webhooks/:id", (req: Request, res: Response) => {
 });
 
 
-// Circuit Breakers List
+// Circuit Breakers List & Reset
 app.get("/admin/circuits", (_req: Request, res: Response) => {
     res.json({ circuits: getAllCircuits(), timestamp: new Date().toISOString() });
 });
+
+app.post("/admin/circuits/:name/reset", (req: Request, res: Response) => {
+    const circuitName = Array.isArray(req.params.name) ? req.params.name[0] : req.params.name;
+    try {
+        upsertCircuit(decodeURIComponent(circuitName), {
+            state: "CLOSED",
+            failure_count: 0,
+            success_count: 0,
+            opened_at: null,
+            half_opened_at: null,
+        });
+        res.json({ message: `Circuit '${circuitName}' reset to CLOSED`, timestamp: new Date().toISOString() });
+    } catch (err: any) {
+        res.status(400).json({ error: err.message || "Failed to reset circuit" });
+    }
+});
+
 
 
 // ---------------------------------------------------------------------------
