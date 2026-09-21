@@ -225,9 +225,75 @@ export function initializeDatabase(): void {
     db.exec(`
         CREATE INDEX IF NOT EXISTS idx_call_logs_tool ON call_logs(tenant_id, tool_name)
     `);
+
+    // -----------------------------------------------------------------------
+    // Table: tenants
+    // -----------------------------------------------------------------------
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS tenants (
+            tenant_id     TEXT PRIMARY KEY,
+            name          TEXT NOT NULL,
+            plan          TEXT NOT NULL DEFAULT 'free' CHECK (plan IN ('free', 'starter', 'pro', 'team')),
+            monthly_quota INTEGER NOT NULL DEFAULT 1000,
+            status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
+            created_at    TEXT NOT NULL
+        )
+    `);
+
+    // Seed default-tenant if not existing
+    db.exec(`
+        INSERT OR IGNORE INTO tenants (tenant_id, name, plan, monthly_quota, status, created_at)
+        VALUES ('default-tenant', 'Default Tenant', 'pro', 500000, 'active', '${new Date().toISOString()}')
+    `);
+
+    // -----------------------------------------------------------------------
+    // Table: api_keys
+    // -----------------------------------------------------------------------
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id           TEXT PRIMARY KEY,
+            tenant_id    TEXT NOT NULL,
+            key_hash     TEXT NOT NULL UNIQUE,
+            prefix       TEXT NOT NULL,
+            name         TEXT NOT NULL,
+            is_active    INTEGER NOT NULL DEFAULT 1,
+            created_at   TEXT NOT NULL,
+            last_used_at TEXT,
+            FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
+        )
+    `);
+
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)
+    `);
+
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id)
+    `);
+
+    // -----------------------------------------------------------------------
+    // Table: webhooks
+    // -----------------------------------------------------------------------
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS webhooks (
+            id          TEXT PRIMARY KEY,
+            tenant_id   TEXT NOT NULL,
+            url         TEXT NOT NULL,
+            secret      TEXT NOT NULL,
+            events_json TEXT NOT NULL,
+            is_active   INTEGER NOT NULL DEFAULT 1,
+            created_at  TEXT NOT NULL,
+            FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
+        )
+    `);
+
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_webhooks_tenant ON webhooks(tenant_id)
+    `);
 }
 
 // Run immediately when the module is first imported
 initializeDatabase();
 
 export default db;
+

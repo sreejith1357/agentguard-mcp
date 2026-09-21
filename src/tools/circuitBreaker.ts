@@ -26,6 +26,9 @@ import {
     deleteCircuit,
 } from "../utils/circuitStore.js";
 import type { CircuitState } from "../types/index.js";
+import { getTenantContext } from "../utils/auth.js";
+import { dispatchWebhookEvent } from "../utils/webhookDispatcher.js";
+
 
 // ---------------------------------------------------------------------------
 // State machine constants
@@ -152,6 +155,21 @@ export function circuitBreakerTools(server: McpServer): void {
                     opened_at,
                     half_opened_at,
                 });
+
+                if (currentState === "OPEN" && previousState !== "OPEN") {
+                    const ctx = getTenantContext();
+                    dispatchWebhookEvent({
+                        tenant_id: ctx.tenant_id,
+                        event: "circuit.tripped",
+                        payload: {
+                            tool_name,
+                            failure_count,
+                            error_message,
+                            timestamp: now,
+                        },
+                    });
+                }
+
 
                 return buildResponse({
                     tool_name,

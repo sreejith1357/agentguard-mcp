@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentguard"
+version = "3.1.0"
+description = "Official Python Client SDK for AgentGuard MCP — Agent Reliability & Security Infrastructure"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Sreejith", email = "sjith310@gmail.com"}
+]
+keywords = ["mcp", "agentguard", "ai-agents", "reliability", "circuit-breaker", "anomaly-detection"]
+dependencies = [
+    "httpx>=0.24.0",
+    "pydantic>=2.0.0"
+]
+
+[project.urls]
+Homepage = "https://agentguard.dev"
+Repository = "https://github.com/sreejith1357/agentguard-mcp"

@@ -23,6 +23,10 @@ import { initializeDatabase } from "./db/schema.js";
 import { authenticateRequest, tenantContextStorage, verifyAdminKey } from "./utils/auth.js";
 import { runDatabaseMaintenance } from "./utils/maintenance.js";
 import { logCall, getUsageStats, getAllTenantsStats, getMonthlyUsageSummary } from "./utils/callLogger.js";
+import { checkTenantRateLimit } from "./utils/rateLimiter.js";
+import { createApiKey, listApiKeys, revokeApiKey, createTenant, listTenants, getTenant } from "./utils/apiKeyStore.js";
+import { createWebhook, listWebhooks, deleteWebhook, dispatchWebhookEvent } from "./utils/webhookDispatcher.js";
+
 
 // ---------------------------------------------------------------------------
 // Server setup
@@ -161,6 +165,40 @@ app.post("/mcp", async (req: Request, res: Response) => {
     // Extract tool name from request body
     const toolName = req.body?.params?.name || "unknown";
     const tenantCtx = (req as any).tenantIdentity;
+    const tenantId = tenantCtx?.tenant_id || "default-tenant";
+
+    // Rate Limiting & Plan Quota Enforcement
+    const rateLimitCheck = checkTenantRateLimit(tenantId);
+    if (!rateLimitCheck.allowed) {
+        res.setHeader("Retry-After", String(rateLimitCheck.resetAt - Math.floor(Date.now() / 1000)));
+        res.setHeader("X-RateLimit-Limit", rateLimitCheck.limit);
+        res.setHeader("X-RateLimit-Remaining", 0);
+
+        if (rateLimitCheck.reason === "monthly_quota_exceeded") {
+            dispatchWebhookEvent({
+                tenant_id: tenantId,
+                event: "quota.warning",
+                payload: {
+                    monthly_used: rateLimitCheck.monthlyUsed,
+                    monthly_quota: rateLimitCheck.monthlyQuota,
+                    message: "Monthly call quota exceeded",
+                },
+            });
+        }
+
+        res.status(429).json({
+            error: "TOO_MANY_REQUESTS",
+            reason: rateLimitCheck.reason,
+            message:
+                rateLimitCheck.reason === "monthly_quota_exceeded"
+                    ? `Monthly call quota of ${rateLimitCheck.limit.toLocaleString()} calls exceeded for plan.`
+                    : `Per-minute rate limit of ${rateLimitCheck.limit} requests/min exceeded.`,
+            monthly_used: rateLimitCheck.monthlyUsed,
+            monthly_quota: rateLimitCheck.monthlyQuota,
+            timestamp: new Date().toISOString(),
+        });
+        return;
+    }
 
     // Wrap res.write & res.end to measure response timing & capture completion state
     const originalWrite = res.write.bind(res);
@@ -201,7 +239,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
         }
 
         logCall({
-            tenant_id: tenantCtx?.tenant_id || "default-tenant",
+            tenant_id: tenantId,
             project_id: tenantCtx?.project_id || "default-project",
             env: tenantCtx?.env || (process.env.AGENTGUARD_API_KEY ? "production" : "development"),
             tool_name: toolName,
@@ -241,16 +279,23 @@ app.post("/mcp", async (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
-// Admin Usage Analytics endpoint
+// Admin API Routes (Usage, Tenants, API Keys, Webhooks, Circuits)
 // ---------------------------------------------------------------------------
 
-app.get("/admin/usage", (req: Request, res: Response) => {
+// Admin Auth Middleware Helper
+function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
     const auth = req.headers.authorization;
     if (!verifyAdminKey(auth)) {
         res.status(401).json({ error: "Unauthorized", timestamp: new Date().toISOString() });
         return;
     }
+    next();
+}
 
+app.use("/admin", requireAdminAuth);
+
+// Usage Analytics
+app.get("/admin/usage", (req: Request, res: Response) => {
     const tenant_id = (req.query.tenant_id as string) || "all";
     const month = (req.query.month as string) || new Date().toISOString().slice(0, 7);
 
@@ -265,6 +310,92 @@ app.get("/admin/usage", (req: Request, res: Response) => {
 
     res.json(getUsageStats(tenant_id, month));
 });
+
+// Tenants Management
+app.get("/admin/tenants", (_req: Request, res: Response) => {
+    res.json({ tenants: listTenants(), timestamp: new Date().toISOString() });
+});
+
+app.post("/admin/tenants", (req: Request, res: Response) => {
+    const { tenant_id, name, plan } = req.body || {};
+    if (!tenant_id || !name) {
+        res.status(400).json({ error: "Missing required fields: tenant_id, name" });
+        return;
+    }
+    const tenant = createTenant({ tenant_id, name, plan });
+    res.json({ tenant, timestamp: new Date().toISOString() });
+});
+
+// API Keys Management
+app.get("/admin/api-keys", (req: Request, res: Response) => {
+    const tenant_id = req.query.tenant_id as string;
+    res.json({ api_keys: listApiKeys(tenant_id), timestamp: new Date().toISOString() });
+});
+
+app.post("/admin/api-keys", (req: Request, res: Response) => {
+    const { tenant_id, name } = req.body || {};
+    if (!tenant_id) {
+        res.status(400).json({ error: "Missing required field: tenant_id" });
+        return;
+    }
+    try {
+        const apiKey = createApiKey({ tenant_id, name });
+        res.json({
+            message: "API key created successfully. Save this raw key now, it will not be shown again.",
+            api_key: apiKey.key,
+            id: apiKey.id,
+            prefix: apiKey.prefix,
+            tenant_id: apiKey.tenant_id,
+            name: apiKey.name,
+            timestamp: new Date().toISOString(),
+        });
+    } catch (err: any) {
+        res.status(400).json({ error: err.message || "Failed to create API key" });
+    }
+});
+
+app.delete("/admin/api-keys/:id", (req: Request, res: Response) => {
+    const keyId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const success = revokeApiKey(keyId);
+    if (!success) {
+        res.status(404).json({ error: "API key not found or already revoked" });
+        return;
+    }
+    res.json({ message: "API key revoked successfully", timestamp: new Date().toISOString() });
+});
+
+// Webhooks Management
+app.get("/admin/webhooks", (req: Request, res: Response) => {
+    const tenant_id = req.query.tenant_id as string;
+    res.json({ webhooks: listWebhooks(tenant_id), timestamp: new Date().toISOString() });
+});
+
+app.post("/admin/webhooks", (req: Request, res: Response) => {
+    const { tenant_id, url, events } = req.body || {};
+    if (!tenant_id || !url) {
+        res.status(400).json({ error: "Missing required fields: tenant_id, url" });
+        return;
+    }
+    const webhook = createWebhook({ tenant_id, url, events });
+    res.json({ webhook, timestamp: new Date().toISOString() });
+});
+
+app.delete("/admin/webhooks/:id", (req: Request, res: Response) => {
+    const hookId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const success = deleteWebhook(hookId);
+    if (!success) {
+        res.status(404).json({ error: "Webhook not found" });
+        return;
+    }
+    res.json({ message: "Webhook deleted successfully", timestamp: new Date().toISOString() });
+});
+
+
+// Circuit Breakers List
+app.get("/admin/circuits", (_req: Request, res: Response) => {
+    res.json({ circuits: getAllCircuits(), timestamp: new Date().toISOString() });
+});
+
 
 // ---------------------------------------------------------------------------
 // Health endpoint — uptime monitoring for Railway / Cloudflare / k8s probes

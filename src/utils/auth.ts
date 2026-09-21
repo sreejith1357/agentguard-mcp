@@ -9,12 +9,15 @@
 import type { Request } from "express";
 import crypto from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { verifyApiKey } from "./apiKeyStore";
 
 export interface TenantIdentity {
     tenant_id: string;
     project_id: string;
     env: string;
     rate_limit: number;
+    plan?: string;
+    monthly_quota?: number;
 }
 
 export interface AuthResult {
@@ -43,27 +46,26 @@ export function getTenantContext(): TenantIdentity {
 
 /**
  * Authenticate an incoming Express HTTP request using Bearer token verification.
- * Employs crypto.timingSafeEqual to prevent timing side-channel attacks.
+ * Supports DB hashed API keys as well as environment variable fallback keys.
  */
 export function authenticateRequest(req: Request): AuthResult {
-    const apiKey = process.env.AGENTGUARD_API_KEY;
+    const envApiKey = process.env.AGENTGUARD_API_KEY;
 
     // Default tenant identity fallback
     const defaultIdentity: TenantIdentity = {
         tenant_id: "default-tenant",
         project_id: "default-project",
-        env: apiKey ? "production" : "development",
-        rate_limit: apiKey ? 100 : 10000,
+        env: envApiKey ? "production" : "development",
+        rate_limit: envApiKey ? 100 : 10000,
     };
-
-    // Open mode — if AGENTGUARD_API_KEY is not set or empty, allow all requests
-    if (!apiKey || apiKey.trim() === "") {
-        return { authenticated: true, identity: defaultIdentity };
-    }
 
     const authHeader = req.headers["authorization"] || req.headers["Authorization"];
 
-    // Missing header
+    // Open mode — if AGENTGUARD_API_KEY is not set AND no auth header is supplied
+    if (!envApiKey && (!authHeader || typeof authHeader !== "string")) {
+        return { authenticated: true, identity: defaultIdentity };
+    }
+
     if (!authHeader || typeof authHeader !== "string") {
         return {
             authenticated: false,
@@ -71,46 +73,59 @@ export function authenticateRequest(req: Request): AuthResult {
         };
     }
 
-    // Invalid format — must be "Bearer <token>"
-    if (!authHeader.startsWith("Bearer ")) {
-        return {
-            authenticated: false,
-            error: "Invalid Authorization format. Use: Bearer <your-api-key>",
-        };
-    }
-
-    // Extract token
-    const tokenRaw = authHeader.slice(7).trim();
+    const tokenRaw = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : authHeader.trim();
 
     // Check if token specifies structured tenant scoping: "tenant_id:project_id:env:key"
     let tokenKey = tokenRaw;
-    let identity: TenantIdentity = { ...defaultIdentity };
+    let customTenantId: string | null = null;
+    let customProjectId = "default-project";
+    let customEnv = "production";
 
     const parts = tokenRaw.split(":");
     if (parts.length === 4) {
-        identity = {
-            tenant_id: parts[0] || "default-tenant",
-            project_id: parts[1] || "default-project",
-            env: parts[2] || "production",
-            rate_limit: 100,
-        };
+        customTenantId = parts[0];
+        customProjectId = parts[1] || "default-project";
+        customEnv = parts[2] || "production";
         tokenKey = parts[3];
     }
 
-    const tokenBuf = Buffer.from(tokenKey, "utf8");
-    const keyBuf = Buffer.from(apiKey, "utf8");
-
-    // Constant-time length check
-    if (tokenBuf.length !== keyBuf.length) {
+    // 1. First check Database for hashed API keys
+    const dbKeyCtx = verifyApiKey(tokenKey);
+    if (dbKeyCtx) {
         return {
-            authenticated: false,
-            error: "Invalid API key",
+            authenticated: true,
+            identity: {
+                tenant_id: customTenantId || dbKeyCtx.tenant_id,
+                project_id: customProjectId,
+                env: customEnv,
+                rate_limit: dbKeyCtx.monthly_quota,
+                plan: dbKeyCtx.plan,
+                monthly_quota: dbKeyCtx.monthly_quota,
+            },
         };
     }
 
-    // Constant-time comparison to prevent timing side-channel attacks
-    if (crypto.timingSafeEqual(tokenBuf, keyBuf)) {
-        return { authenticated: true, identity };
+    // 2. Fall back to AGENTGUARD_API_KEY env variable check
+    if (envApiKey && envApiKey.trim() !== "") {
+        const tokenBuf = Buffer.from(tokenKey, "utf8");
+        const keyBuf = Buffer.from(envApiKey, "utf8");
+
+        if (tokenBuf.length === keyBuf.length && crypto.timingSafeEqual(tokenBuf, keyBuf)) {
+            return {
+                authenticated: true,
+                identity: {
+                    tenant_id: customTenantId || "default-tenant",
+                    project_id: customProjectId,
+                    env: customEnv,
+                    rate_limit: 10000,
+                },
+            };
+        }
+    }
+
+    // 3. Open mode fallback if AGENTGUARD_API_KEY not set and no valid DB key matched
+    if (!envApiKey) {
+        return { authenticated: true, identity: defaultIdentity };
     }
 
     return {
@@ -120,14 +135,12 @@ export function authenticateRequest(req: Request): AuthResult {
 }
 
 /**
- * Verifies if the incoming Authorization header contains a valid admin API key.
- * Supports "Bearer <key>" or "Bearer <tenant_id>:<project_id>:<env>:<key>" or raw "<key>".
- * If AGENTGUARD_API_KEY is not set (open mode), returns true.
+ * Verifies if the incoming Authorization header contains a valid admin API key or DB key.
  */
 export function verifyAdminKey(authHeader?: string): boolean {
-    const apiKey = process.env.AGENTGUARD_API_KEY;
+    const envApiKey = process.env.AGENTGUARD_API_KEY;
 
-    if (!apiKey || apiKey.trim() === "") {
+    if (!envApiKey && (!authHeader || typeof authHeader !== "string")) {
         return true;
     }
 
@@ -139,12 +152,19 @@ export function verifyAdminKey(authHeader?: string): boolean {
     const parts = tokenRaw.split(":");
     const tokenKey = parts.length === 4 ? parts[3] : tokenRaw;
 
-    const tokenBuf = Buffer.from(tokenKey, "utf8");
-    const keyBuf = Buffer.from(apiKey, "utf8");
+    // Check DB key first
+    const dbKeyCtx = verifyApiKey(tokenKey);
+    if (dbKeyCtx) return true;
 
-    if (tokenBuf.length !== keyBuf.length) {
-        return false;
+    // Check env key
+    if (envApiKey && envApiKey.trim() !== "") {
+        const tokenBuf = Buffer.from(tokenKey, "utf8");
+        const keyBuf = Buffer.from(envApiKey, "utf8");
+        if (tokenBuf.length === keyBuf.length && crypto.timingSafeEqual(tokenBuf, keyBuf)) {
+            return true;
+        }
     }
 
-    return crypto.timingSafeEqual(tokenBuf, keyBuf);
+    return !envApiKey;
 }
+

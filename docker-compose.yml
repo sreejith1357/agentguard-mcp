@@ -1,0 +1,27 @@
+version: "3.8"
+
+services:
+  agentguard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentguard-mcp
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - AGENTGUARD_API_KEY=${AGENTGUARD_API_KEY:-}
+      - STORAGE_MODE=${STORAGE_MODE:-sqlite}
+      - DATABASE_URL=${DATABASE_URL:-}
+    volumes:
+      - agentguard_data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  agentguard_data:

@@ -18,6 +18,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildResponse, buildErrorResponse } from "../utils/response.js";
 import { getBaseline } from "../utils/metricStore.js";
+import { getTenantContext } from "../utils/auth.js";
+import { dispatchWebhookEvent } from "../utils/webhookDispatcher.js";
 import type {
     AnomalyReport,
     AnomalySensitivity,
@@ -25,6 +27,7 @@ import type {
     BaselineSummaryNumeric,
     BaselineSummaryString,
 } from "../types/index.js";
+
 
 // ---------------------------------------------------------------------------
 // Math utilities (pure, no deps)
@@ -435,6 +438,22 @@ export function detectAnomalyTool(server: McpServer): void {
                         ? Math.round(zScore * 10000) / 10000
                         : (zScore > 0 ? 999999 : -999999);
 
+                    if (anomalyDetected) {
+                        const ctx = getTenantContext();
+                        dispatchWebhookEvent({
+                            tenant_id: ctx.tenant_id,
+                            event: "anomaly.detected",
+                            payload: {
+                                metric_name,
+                                observed_value: value,
+                                severity,
+                                z_score: safeZScore,
+                                verdict,
+                                timestamp: new Date().toISOString(),
+                            },
+                        });
+                    }
+
                     return buildResponse<AnomalyReport>({
                         anomaly_detected: anomalyDetected,
                         metric_name,
@@ -456,6 +475,7 @@ export function detectAnomalyTool(server: McpServer): void {
                         },
                         timestamp: new Date().toISOString(),
                     });
+
                 }
 
                 // -----------------------------------------------------------
