@@ -6,6 +6,8 @@ import helmet from "helmet";
 import cors from "cors";
 import morgan from "morgan";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
+
 
 // Tools
 import { healthCheckTool } from "./tools/healthCheck.js";
@@ -278,11 +280,17 @@ app.post("/mcp", async (req: Request, res: Response) => {
     }
 });
 
-// ---------------------------------------------------------------------------
-// Admin API Routes (Usage, Tenants, API Keys, Webhooks, Circuits)
-// ---------------------------------------------------------------------------
+// Serve standalone Admin Console single-page web app for browser requests
+app.get("/admin", (req: Request, res: Response, next: NextFunction) => {
+    if (req.headers.accept?.includes("text/html") || !req.headers.authorization) {
+        const adminPath = path.resolve(__dirname, "..", "public", "admin.html");
+        res.sendFile(adminPath);
+        return;
+    }
+    next();
+});
 
-// Admin Auth Middleware Helper
+// Admin Auth Middleware Helper for JSON API endpoints
 function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
     const auth = req.headers.authorization;
     if (!verifyAdminKey(auth)) {
@@ -293,6 +301,7 @@ function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
 }
 
 app.use("/admin", requireAdminAuth);
+
 
 // Usage Analytics
 app.get("/admin/usage", (req: Request, res: Response) => {
