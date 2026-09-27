@@ -1,10 +1,9 @@
 # AgentGuard MCP v3.1.0 Multi-stage Production Dockerfile
-FROM node:20-alpine AS builder
+FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Copy package manifests
-RUN apk add --no-cache python3 make g++
+# Copy package manifests and install dependencies
 COPY package*.json ./
 RUN npm ci
 
@@ -14,14 +13,14 @@ COPY src/ ./src/
 RUN npm run build
 
 # Production runtime stage
-FROM node:20-alpine AS runner
+FROM node:20-slim AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# Install build dependencies for better-sqlite3 native addon
-RUN apk add --no-cache python3 make g++
+# Install curl for healthcheck
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
 RUN npm ci --only=production
@@ -36,6 +35,6 @@ VOLUME ["/app/agentguard.db"]
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+  CMD curl -f http://localhost:3000/health || exit 1
 
 CMD ["node", "dist/index.js"]
