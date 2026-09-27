@@ -5,4 +5,16 @@ data/*.jsonl
 *.env.local
 *.env.*.local
 .DS_Store
-agentguard.db*
+
+# SQLite database and WAL sidecar files
+agentguard.db
+agentguard.db-shm
+agentguard.db-wal
+
+# Legacy audit snapshot exports
+agentguard_audit_*.json
+agentguard_audit_*.txt
+
+# Scratch and demo scripts
+live_demo.js
+scratch/

@@ -72,6 +72,9 @@ export function getUsageStats(
     month_key?: string
 ): UsageStats {
     const month = month_key || new Date().toISOString().slice(0, 7);
+    const isAll = tenant_id === "all";
+    const whereClause = isAll ? "WHERE month_key = ?" : "WHERE tenant_id = ? AND month_key = ?";
+    const params = isAll ? [month] : [tenant_id, month];
 
     try {
         const summaryRow = db
@@ -85,10 +88,10 @@ export function getUsageStats(
                 MIN(called_at) as first_call_at,
                 MAX(called_at) as last_call_at
             FROM call_logs
-            WHERE tenant_id = ? AND month_key = ?
+            ${whereClause}
         `
             )
-            .get(tenant_id, month) as {
+            .get(...params) as {
             total_calls: number;
             successful_calls: number | null;
             failed_calls: number | null;
@@ -102,36 +105,36 @@ export function getUsageStats(
                 `
             SELECT tool_name, COUNT(*) as count
             FROM call_logs
-            WHERE tenant_id = ? AND month_key = ?
+            ${whereClause}
             GROUP BY tool_name
             ORDER BY count DESC
         `
             )
-            .all(tenant_id, month) as { tool_name: string; count: number }[];
+            .all(...params) as { tool_name: string; count: number }[];
 
         const error_codes = db
             .prepare(
                 `
             SELECT error_code as code, COUNT(*) as count
             FROM call_logs
-            WHERE tenant_id = ? AND month_key = ? AND error_code IS NOT NULL AND error_code != ''
+            ${whereClause} AND error_code IS NOT NULL AND error_code != ''
             GROUP BY error_code
             ORDER BY count DESC
         `
             )
-            .all(tenant_id, month) as { code: string; count: number }[];
+            .all(...params) as { code: string; count: number }[];
 
         const daily_breakdown = db
             .prepare(
                 `
             SELECT substr(called_at, 1, 10) as date, COUNT(*) as count
             FROM call_logs
-            WHERE tenant_id = ? AND month_key = ?
+            ${whereClause}
             GROUP BY substr(called_at, 1, 10)
             ORDER BY date ASC
         `
             )
-            .all(tenant_id, month) as { date: string; count: number }[];
+            .all(...params) as { date: string; count: number }[];
 
         const total_calls = summaryRow?.total_calls || 0;
         const successful_calls = summaryRow?.successful_calls || 0;

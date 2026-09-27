@@ -135,12 +135,14 @@ export function authenticateRequest(req: Request): AuthResult {
 }
 
 /**
- * Verifies if the incoming Authorization header contains a valid admin API key or DB key.
+ * Verifies if the incoming Authorization header contains a valid admin key or DB key.
+ * Supports AGENTGUARD_ADMIN_KEY or AGENTGUARD_API_KEY.
  */
 export function verifyAdminKey(authHeader?: string): boolean {
-    const envApiKey = process.env.AGENTGUARD_API_KEY;
+    const adminKey = process.env.AGENTGUARD_ADMIN_KEY || process.env.AGENTGUARD_API_KEY;
 
-    if (!envApiKey && (!authHeader || typeof authHeader !== "string")) {
+    // If no admin key configured in environment, allow open access in dev mode
+    if (!adminKey || adminKey.trim() === "") {
         return true;
     }
 
@@ -152,19 +154,17 @@ export function verifyAdminKey(authHeader?: string): boolean {
     const parts = tokenRaw.split(":");
     const tokenKey = parts.length === 4 ? parts[3] : tokenRaw;
 
-    // Check DB key first
+    // Check environment admin key using constant-time comparison
+    const tokenBuf = Buffer.from(tokenKey, "utf8");
+    const keyBuf = Buffer.from(adminKey.trim(), "utf8");
+    if (tokenBuf.length === keyBuf.length && crypto.timingSafeEqual(tokenBuf, keyBuf)) {
+        return true;
+    }
+
+    // Check DB key
     const dbKeyCtx = verifyApiKey(tokenKey);
     if (dbKeyCtx) return true;
 
-    // Check env key
-    if (envApiKey && envApiKey.trim() !== "") {
-        const tokenBuf = Buffer.from(tokenKey, "utf8");
-        const keyBuf = Buffer.from(envApiKey, "utf8");
-        if (tokenBuf.length === keyBuf.length && crypto.timingSafeEqual(tokenBuf, keyBuf)) {
-            return true;
-        }
-    }
-
-    return !envApiKey;
+    return false;
 }
 

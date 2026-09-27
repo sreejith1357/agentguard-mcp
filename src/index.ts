@@ -27,8 +27,9 @@ import { authenticateRequest, tenantContextStorage, verifyAdminKey } from "./uti
 import { runDatabaseMaintenance } from "./utils/maintenance.js";
 import { logCall, getUsageStats, getAllTenantsStats, getMonthlyUsageSummary } from "./utils/callLogger.js";
 import { checkTenantRateLimit } from "./utils/rateLimiter.js";
-import { createApiKey, listApiKeys, revokeApiKey, createTenant, listTenants, getTenant } from "./utils/apiKeyStore.js";
+import { createApiKey, listApiKeys, revokeApiKey, createTenant, listTenants, getTenant, updateTenantStatus, deleteTenant } from "./utils/apiKeyStore.js";
 import { createWebhook, listWebhooks, deleteWebhook, dispatchWebhookEvent } from "./utils/webhookDispatcher.js";
+import { logAdminAction, listAdminAuditLogs } from "./utils/auditLogger.js";
 
 
 // ---------------------------------------------------------------------------
@@ -57,8 +58,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     next();
 });
 
-// HTTP security headers via helmet
-app.use(helmet());
+// HTTP security headers via helmet (disable CSP header to allow standalone admin console script execution)
+app.use(helmet({ contentSecurityPolicy: false }));
 
 // CORS configuration (allow all origins by default, configurable via CORS_ORIGIN)
 app.use(cors({ origin: process.env.CORS_ORIGIN || "*" }));
@@ -73,7 +74,7 @@ app.use(express.json({ limit: "2mb" }));
 // ---------------------------------------------------------------------------
 
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
-const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "100", 10);
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "500", 10);
 
 app.use(
     rateLimit({
@@ -305,10 +306,24 @@ app.post("/mcp", async (req: Request, res: Response) => {
     }
 });
 
+// Dedicated Rate Limiter for Admin Endpoints to prevent brute-forcing
+const adminRateLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "TOO_MANY_REQUESTS", message: "Admin rate limit exceeded. Please wait 1 minute." }
+});
+
+app.use("/admin", adminRateLimiter);
+
 // Serve standalone Admin Console single-page web app for browser requests
 app.get("/admin", (req: Request, res: Response, next: NextFunction) => {
     if (req.headers.accept?.includes("text/html") || !req.headers.authorization) {
         const adminPath = path.resolve(__dirname, "..", "public", "admin.html");
+        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        res.setHeader("Pragma", "no-cache");
+        res.setHeader("Expires", "0");
         res.sendFile(adminPath);
         return;
     }
@@ -317,9 +332,13 @@ app.get("/admin", (req: Request, res: Response, next: NextFunction) => {
 
 // Admin Auth Middleware Helper for JSON API endpoints
 function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
+    if (req.method === "OPTIONS") {
+        next();
+        return;
+    }
     const auth = req.headers.authorization;
     if (!verifyAdminKey(auth)) {
-        res.status(401).json({ error: "Unauthorized", timestamp: new Date().toISOString() });
+        res.status(401).json({ error: "Unauthorized", message: "Invalid or missing Admin API Key", timestamp: new Date().toISOString() });
         return;
     }
     next();
@@ -333,16 +352,14 @@ app.get("/admin/usage", (req: Request, res: Response) => {
     const tenant_id = (req.query.tenant_id as string) || "all";
     const month = (req.query.month as string) || new Date().toISOString().slice(0, 7);
 
-    if (tenant_id === "all") {
-        res.json({
-            month,
-            tenants: getAllTenantsStats(month),
-            timestamp: new Date().toISOString(),
-        });
-        return;
-    }
+    const stats = getUsageStats(tenant_id, month);
+    const tenantList = getAllTenantsStats(month);
 
-    res.json(getUsageStats(tenant_id, month));
+    res.json({
+        ...stats,
+        tenants: tenantList,
+        timestamp: new Date().toISOString(),
+    });
 });
 
 // Tenants Management
@@ -351,14 +368,69 @@ app.get("/admin/tenants", (_req: Request, res: Response) => {
 });
 
 app.post("/admin/tenants", (req: Request, res: Response) => {
-    const { tenant_id, name, plan } = req.body || {};
+    const { tenant_id, name, plan, email, notes } = req.body || {};
     if (!tenant_id || !name) {
         res.status(400).json({ error: "Missing required fields: tenant_id, name" });
         return;
     }
-    const tenant = createTenant({ tenant_id, name, plan });
+    const tenant = createTenant({ tenant_id, name, plan, email, notes });
+    logAdminAction({
+        action: "CREATE_TENANT",
+        tenant_id: tenant.tenant_id,
+        details: `Created tenant '${tenant.name}' with plan '${tenant.plan}'${email ? ` (${email})` : ""}`,
+        ip_address: req.ip || req.socket.remoteAddress,
+    });
     res.json({ tenant, timestamp: new Date().toISOString() });
 });
+
+
+app.patch("/admin/tenants/:id", (req: Request, res: Response) => {
+    const tenant_id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const { status, plan, notes, email } = req.body || {};
+    const updated = updateTenantStatus({ tenant_id, status, plan, notes, email });
+    if (!updated) {
+        res.status(404).json({ error: "Tenant not found" });
+        return;
+    }
+    logAdminAction({
+        action: "UPDATE_TENANT",
+        tenant_id: updated.tenant_id,
+        details: `Updated tenant: status='${updated.status}', plan='${updated.plan}'${notes !== undefined ? `, notes updated` : ""}`,
+        ip_address: req.ip || req.socket.remoteAddress,
+    });
+    res.json({ tenant: updated, timestamp: new Date().toISOString() });
+});
+
+
+app.delete("/admin/tenants/:id", (req: Request, res: Response) => {
+    const tenant_id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (tenant_id === "default-tenant") {
+        res.status(400).json({ error: "Cannot delete the default system tenant." });
+        return;
+    }
+    try {
+        const existing = getTenant(tenant_id);
+        if (!existing) {
+            res.status(404).json({ error: "Tenant not found" });
+            return;
+        }
+        const deleted = deleteTenant(tenant_id);
+        if (!deleted) {
+            res.status(500).json({ error: "Delete operation failed" });
+            return;
+        }
+        logAdminAction({
+            action: "DELETE_TENANT",
+            tenant_id,
+            details: `Permanently deleted tenant '${existing.name}' (${tenant_id})`,
+            ip_address: req.ip || req.socket.remoteAddress,
+        });
+        res.json({ message: `Tenant '${tenant_id}' deleted successfully.`, timestamp: new Date().toISOString() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message || "Failed to delete tenant" });
+    }
+});
+
 
 // API Keys Management
 app.get("/admin/api-keys", (req: Request, res: Response) => {
@@ -374,6 +446,12 @@ app.post("/admin/api-keys", (req: Request, res: Response) => {
     }
     try {
         const apiKey = createApiKey({ tenant_id, name });
+        logAdminAction({
+            action: "CREATE_API_KEY",
+            tenant_id: apiKey.tenant_id,
+            details: `Generated API Key '${apiKey.prefix}' (${apiKey.name})`,
+            ip_address: req.ip || req.socket.remoteAddress,
+        });
         res.json({
             message: "API key created successfully. Save this raw key now, it will not be shown again.",
             api_key: apiKey.key,
@@ -395,6 +473,11 @@ app.delete("/admin/api-keys/:id", (req: Request, res: Response) => {
         res.status(404).json({ error: "API key not found or already revoked" });
         return;
     }
+    logAdminAction({
+        action: "REVOKE_API_KEY",
+        details: `Revoked API key '${keyId}'`,
+        ip_address: req.ip || req.socket.remoteAddress,
+    });
     res.json({ message: "API key revoked successfully", timestamp: new Date().toISOString() });
 });
 
@@ -411,6 +494,12 @@ app.post("/admin/webhooks", (req: Request, res: Response) => {
         return;
     }
     const webhook = createWebhook({ tenant_id, url, events });
+    logAdminAction({
+        action: "CREATE_WEBHOOK",
+        tenant_id: webhook.tenant_id,
+        details: `Subscribed webhook '${webhook.id}' to '${webhook.url}'`,
+        ip_address: req.ip || req.socket.remoteAddress,
+    });
     res.json({ webhook, timestamp: new Date().toISOString() });
 });
 
@@ -421,6 +510,11 @@ app.delete("/admin/webhooks/:id", (req: Request, res: Response) => {
         res.status(404).json({ error: "Webhook not found" });
         return;
     }
+    logAdminAction({
+        action: "DELETE_WEBHOOK",
+        details: `Deleted webhook '${hookId}'`,
+        ip_address: req.ip || req.socket.remoteAddress,
+    });
     res.json({ message: "Webhook deleted successfully", timestamp: new Date().toISOString() });
 });
 
@@ -433,17 +527,29 @@ app.get("/admin/circuits", (_req: Request, res: Response) => {
 app.post("/admin/circuits/:name/reset", (req: Request, res: Response) => {
     const circuitName = Array.isArray(req.params.name) ? req.params.name[0] : req.params.name;
     try {
-        upsertCircuit(decodeURIComponent(circuitName), {
+        const decodedName = decodeURIComponent(circuitName);
+        upsertCircuit(decodedName, {
             state: "CLOSED",
             failure_count: 0,
             success_count: 0,
             opened_at: null,
             half_opened_at: null,
         });
+        logAdminAction({
+            action: "RESET_CIRCUIT",
+            details: `Reset circuit breaker '${decodedName}' to CLOSED`,
+            ip_address: req.ip || req.socket.remoteAddress,
+        });
         res.json({ message: `Circuit '${circuitName}' reset to CLOSED`, timestamp: new Date().toISOString() });
     } catch (err: any) {
         res.status(400).json({ error: err.message || "Failed to reset circuit" });
     }
+});
+
+// Admin Audit Logs Endpoint
+app.get("/admin/audit-logs", (_req: Request, res: Response) => {
+    const logs = listAdminAuditLogs(100);
+    res.json({ audit_logs: logs, timestamp: new Date().toISOString() });
 });
 
 
@@ -578,10 +684,18 @@ const httpServer = app.listen(PORT, () => {
 
     if (!process.env.AGENTGUARD_API_KEY) {
         console.warn(
-            "[AgentGuard] ⚠️  AGENTGUARD_API_KEY not set — running in open mode. Set this in production."
+            "[AgentGuard] ⚠️  AGENTGUARD_API_KEY not set — running in OPEN mode. Set this in production."
         );
     } else {
         console.log("[AgentGuard] ✅  API key authentication enabled");
+    }
+
+    if (!process.env.AGENTGUARD_ADMIN_KEY) {
+        console.warn(
+            "[AgentGuard] ⚠️  AGENTGUARD_ADMIN_KEY not set — Admin Console is UNPROTECTED. Set this before going live."
+        );
+    } else {
+        console.log("[AgentGuard] ✅  Admin Console protected by AGENTGUARD_ADMIN_KEY");
     }
 });
 

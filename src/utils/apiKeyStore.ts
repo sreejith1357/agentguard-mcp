@@ -15,6 +15,8 @@ export interface TenantRecord {
     monthly_quota: number;
     status: "active" | "suspended";
     created_at: string;
+    notes?: string | null;
+    email?: string | null;
 }
 
 export interface ApiKeyRecord {
@@ -185,22 +187,61 @@ export function revokeApiKey(keyId: string): boolean {
 /**
  * Creates or updates a tenant
  */
-export function createTenant(params: { tenant_id: string; name: string; plan?: "free" | "starter" | "pro" | "team" }): TenantRecord {
+export function createTenant(params: { tenant_id: string; name: string; plan?: "free" | "starter" | "pro" | "team"; email?: string; notes?: string }): TenantRecord {
     const plan = params.plan || "free";
     const quota = PLAN_QUOTAS[plan] || 1000;
     const createdAt = new Date().toISOString();
 
     db.prepare(`
-        INSERT INTO tenants (tenant_id, name, plan, monthly_quota, status, created_at)
-        VALUES (?, ?, ?, ?, 'active', ?)
+        INSERT INTO tenants (tenant_id, name, plan, monthly_quota, status, created_at, email, notes)
+        VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
         ON CONFLICT(tenant_id) DO UPDATE SET
             name = excluded.name,
             plan = excluded.plan,
             monthly_quota = excluded.monthly_quota
-    `).run(params.tenant_id, params.name, plan, quota, createdAt);
+    `).run(params.tenant_id, params.name, plan, quota, createdAt, params.email || null, params.notes || null);
 
     return getTenant(params.tenant_id)!;
 }
+
+/**
+ * Updates a tenant's plan, status, or notes/email
+ */
+export function updateTenantStatus(params: { tenant_id: string; status?: "active" | "suspended"; plan?: "free" | "starter" | "pro" | "team"; notes?: string; email?: string }): TenantRecord | null {
+    const tenant = getTenant(params.tenant_id);
+    if (!tenant) return null;
+
+    const newStatus = params.status || tenant.status;
+    const newPlan = params.plan || tenant.plan;
+    const newQuota = PLAN_QUOTAS[newPlan] || tenant.monthly_quota;
+    const newNotes = params.notes !== undefined ? params.notes : tenant.notes;
+    const newEmail = params.email !== undefined ? params.email : tenant.email;
+
+    db.prepare(`
+        UPDATE tenants
+        SET status = ?, plan = ?, monthly_quota = ?, notes = ?, email = ?
+        WHERE tenant_id = ?
+    `).run(newStatus, newPlan, newQuota, newNotes || null, newEmail || null, params.tenant_id);
+
+    keyCache.clear();
+    return getTenant(params.tenant_id);
+}
+
+
+/**
+ * Permanently deletes a tenant and all their API keys and webhooks (cascade)
+ */
+export function deleteTenant(tenant_id: string): boolean {
+    try {
+        const result = db.prepare("DELETE FROM tenants WHERE tenant_id = ?").run(tenant_id);
+        keyCache.clear();
+        return result.changes > 0;
+    } catch (err) {
+        console.error("Error deleting tenant:", err);
+        return false;
+    }
+}
+
 
 /**
  * Gets a tenant record
@@ -216,6 +257,8 @@ export function getTenant(tenant_id: string): TenantRecord | null {
             monthly_quota: row.monthly_quota,
             status: row.status,
             created_at: row.created_at,
+            notes: row.notes || null,
+            email: row.email || null,
         };
     } catch {
         return null;
@@ -235,6 +278,8 @@ export function listTenants(): TenantRecord[] {
             monthly_quota: row.monthly_quota,
             status: row.status,
             created_at: row.created_at,
+            notes: row.notes || null,
+            email: row.email || null,
         }));
     } catch {
         return [];

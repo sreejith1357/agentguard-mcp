@@ -12,16 +12,28 @@ services:
     environment:
       - PORT=3000
       - NODE_ENV=production
-      - AGENTGUARD_API_KEY=${AGENTGUARD_API_KEY:-}
-      - STORAGE_MODE=${STORAGE_MODE:-sqlite}
+      # SECURITY — set both of these to strong random values before going live
+      # Generate: openssl rand -hex 32
+      - AGENTGUARD_API_KEY=${AGENTGUARD_API_KEY}
+      - AGENTGUARD_ADMIN_KEY=${AGENTGUARD_ADMIN_KEY}
+      # Rate limit: 500 requests per 15 minutes per IP (appropriate for AI agent workloads)
+      - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-500}
+      # Database backend: sqlite (default) or postgres
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-sqlite}
       - DATABASE_URL=${DATABASE_URL:-}
+      # Optional CORS restriction
+      - CORS_ORIGIN=${CORS_ORIGIN:-*}
     volumes:
       - agentguard_data:/app/data
+      # Persist the SQLite database file across container restarts
+      - agentguard_db:/app/agentguard.db
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 10s
 
 volumes:
   agentguard_data:
+  agentguard_db:

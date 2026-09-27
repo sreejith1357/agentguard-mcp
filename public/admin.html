@@ -15,7 +15,7 @@
     }
     .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     .max-w-7xl { max-width: 1280px; margin: 0 auto; }
-    
+
     /* Card Styles */
     .card {
       background-color: #111118;
@@ -24,7 +24,7 @@
       padding: 24px;
       box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
     }
-    
+
     /* Header Bar */
     .header-bar {
       display: flex;
@@ -39,9 +39,9 @@
       font-size: 11px; font-family: monospace; background: rgba(0, 255, 135, 0.1);
       color: #00ff87; border: 1px solid rgba(0, 255, 135, 0.3); padding: 2px 8px; border-radius: 4px;
     }
-    
+
     /* Host & Key Inputs */
-    .config-group { display: flex; flex-wrap: wrap; items-center; gap: 12px; }
+    .config-group { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
     .input-box {
       display: flex; align-items: center; background: #0a0a0f; border: 1px solid #334155;
       border-radius: 10px; padding: 6px 12px; font-size: 12px; font-family: monospace; color: #94a3b8;
@@ -52,45 +52,64 @@
     .btn-sync {
       background: rgba(0, 255, 135, 0.15); border: 1px solid rgba(0, 255, 135, 0.4);
       color: #00ff87; padding: 8px 16px; border-radius: 10px; font-weight: 600; cursor: pointer;
-      font-size: 13px; transition: all 0.2s;
+      font-size: 13px; transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px;
     }
     .btn-sync:hover { background: rgba(0, 255, 135, 0.25); transform: translateY(-1px); }
 
+    .btn-logout {
+      background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #f87171; padding: 8px 14px; border-radius: 10px; font-weight: 600; cursor: pointer;
+      font-size: 12px; font-family: monospace; transition: all 0.2s;
+    }
+    .btn-logout:hover { background: rgba(239, 68, 68, 0.25); }
+
+    /* Sync indicator */
+    .sync-indicator { font-size: 11px; font-family: monospace; color: #475569; }
+    .sync-indicator.syncing { color: #00ff87; }
+
     /* Stat Grid */
-    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; margin-bottom: 32px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin-bottom: 32px; }
     .stat-card { background: #111118; border: 1px solid #1e1e2e; border-radius: 16px; padding: 20px; }
     .stat-label { font-size: 11px; font-family: monospace; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
     .stat-value { font-size: 32px; font-weight: 900; font-family: monospace; color: #ffffff; }
 
     /* Nav Tabs */
-    .tab-bar { display: flex; border-bottom: 1px solid #1e1e2e; margin-bottom: 32px; gap: 8px; }
+    .tab-bar { display: flex; flex-wrap: wrap; border-bottom: 1px solid #1e1e2e; margin-bottom: 32px; gap: 8px; }
     .tab-btn {
-      padding: 12px 20px; font-size: 14px; font-weight: 600; color: #94a3b8; background: transparent;
-      border: none; border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.2s;
+      padding: 12px 18px; font-size: 13px; font-weight: 600; color: #94a3b8; background: transparent;
+      border: none; border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.2s; border-radius: 8px 8px 0 0;
     }
-    .tab-btn.active { color: #00ff87; border-bottom-color: #00ff87; background: rgba(0, 255, 135, 0.05); }
+    .tab-btn:hover { color: #cbd5e1; background: rgba(255, 255, 255, 0.02); }
+    .tab-btn.active { color: #00ff87; border-bottom-color: #00ff87; background: rgba(0, 255, 135, 0.08); }
 
     /* Forms */
-    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; margin-bottom: 32px; }
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; margin-bottom: 32px; }
     .form-group { margin-bottom: 16px; }
     .form-label { display: block; font-size: 12px; font-family: monospace; color: #94a3b8; margin-bottom: 6px; }
-    .form-input, .form-select {
+    .form-input, .form-select, .form-textarea {
       width: 100%; background: #0a0a0f; border: 1px solid #1e1e2e; border-radius: 10px;
-      padding: 10px 14px; font-size: 14px; color: #ffffff; outline: none; font-family: monospace;
+      padding: 10px 14px; font-size: 13px; color: #ffffff; outline: none; font-family: monospace;
     }
-    .form-input:focus, .form-select:focus { border-color: #00ff87; }
+    .form-textarea { resize: vertical; min-height: 64px; }
+    .form-input:focus, .form-select:focus, .form-textarea:focus { border-color: #00ff87; }
     .btn-submit {
       width: 100%; padding: 12px; border-radius: 10px; border: none; font-weight: 700;
       font-size: 14px; cursor: pointer; transition: all 0.2s; background: #00ff87; color: #0a0a0f;
     }
     .btn-submit:hover { background: #00cc6a; }
+    .btn-submit:active { transform: scale(0.99); }
 
     /* Tables */
     .table-container { width: 100%; overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; font-family: monospace; }
-    th { background: #0a0a0f; color: #94a3b8; padding: 12px; border-bottom: 1px solid #1e1e2e; }
-    td { padding: 14px 12px; border-bottom: 1px solid rgba(30, 30, 46, 0.6); color: #cbd5e1; }
+    th { background: #0a0a0f; color: #94a3b8; padding: 12px; border-bottom: 1px solid #1e1e2e; text-transform: uppercase; font-size: 11px; }
+    td { padding: 14px 12px; border-bottom: 1px solid rgba(30, 30, 46, 0.6); color: #cbd5e1; vertical-align: middle; }
     tr:hover td { background: rgba(255, 255, 255, 0.03); }
+
+    /* Filter Bar */
+    .filter-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 16px; }
+    .search-input { width: 260px; background: #0a0a0f; border: 1px solid #1e1e2e; border-radius: 8px; padding: 8px 12px; font-size: 12px; font-family: monospace; color: #fff; outline: none; }
+    .search-input:focus { border-color: #334155; }
 
     /* Circuits Grid */
     .circuit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
@@ -102,32 +121,67 @@
     }
     .state-closed { background: rgba(34, 197, 94, 0.15); color: #4ade80; border-color: rgba(34, 197, 94, 0.3); }
     .state-open { background: rgba(239, 68, 68, 0.15); color: #f87171; border-color: rgba(239, 68, 68, 0.3); }
+    .state-half-open { background: rgba(251, 191, 36, 0.15); color: #fbbf24; border-color: rgba(251, 191, 36, 0.3); }
     .btn-reset {
       margin-top: 16px; width: 100%; padding: 8px; border-radius: 8px; background: rgba(0, 255, 135, 0.1);
       color: #00ff87; border: 1px solid rgba(0, 255, 135, 0.3); font-weight: 600; font-family: monospace;
-      cursor: pointer; font-size: 12px;
+      cursor: pointer; font-size: 12px; transition: all 0.2s;
     }
     .btn-reset:hover { background: rgba(0, 255, 135, 0.2); }
-    
+
     .key-alert {
       background: rgba(0, 255, 135, 0.1); border: 2px solid #00ff87; border-radius: 16px;
       padding: 20px; margin-bottom: 32px;
     }
     .hidden { display: none !important; }
+
+    /* Quota progress bar */
+    .quota-bar-wrap { width: 100px; background: #0a0a0f; border-radius: 9999px; height: 6px; overflow: hidden; border: 1px solid #1e1e2e; }
+    .quota-bar { height: 100%; border-radius: 9999px; transition: width 0.5s ease; }
+
+    /* Webhook event badges */
+    .event-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+    .event-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; font-family: monospace; background: rgba(168,85,247,0.12); color: #c084fc; border: 1px solid rgba(168,85,247,0.25); }
+
+    /* Auth Overlay Modal */
+    .modal-backdrop {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(10, 10, 15, 0.85); backdrop-filter: blur(8px);
+      display: flex; align-items: center; justify-content: center; z-index: 9999;
+    }
+    .modal-box {
+      background: #111118; border: 1px solid #1e1e2e; border-radius: 20px;
+      padding: 32px; width: 100%; max-width: 440px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+    }
+
+    /* Bearer token copy box */
+    .bearer-box {
+      display: flex; align-items: center; justify-content: space-between;
+      background: #0a0a0f; border: 1px solid rgba(6, 182, 212, 0.4);
+      padding: 10px 14px; border-radius: 10px; font-family: monospace; font-size: 12px; color: #06b6d4;
+      margin-top: 10px; word-break: break-all; gap: 10px;
+    }
+    .btn-copy-small {
+      flex-shrink: 0; padding: 4px 12px; border-radius: 6px; background: rgba(6,182,212,0.15);
+      color: #06b6d4; border: 1px solid rgba(6,182,212,0.3); font-weight: 600; cursor: pointer;
+      font-size: 11px; font-family: monospace; transition: all 0.15s; white-space: nowrap;
+    }
+    .btn-copy-small:hover { background: rgba(6,182,212,0.3); }
+    .btn-copy-small.copied { color: #4ade80; border-color: rgba(34,197,94,0.4); background: rgba(34,197,94,0.1); }
   </style>
 </head>
 <body>
   <div class="max-w-7xl">
-    
+
     <!-- Top Header Bar -->
     <div class="card header-bar">
       <div>
         <div class="header-title">
           <span>AgentGuard MCP Admin Console</span>
-          <span class="badge-v3">v3.1.0 Live</span>
+          <span class="badge-v3">v3.1.0 Enterprise</span>
         </div>
-        <p style="color: #94a3b8; font-size: 14px; margin-top: 4px;">
-          Enterprise operational console for API keys, rate limits, tool circuit breakers, and webhooks.
+        <p style="color: #94a3b8; font-size: 13px; margin-top: 4px;">
+          Operational gateway for multi-tenant keys, subscriptions, circuit breakers, and audit security.
         </p>
       </div>
 
@@ -139,11 +193,17 @@
 
         <div class="input-box">
           <span>Key:</span>
-          <input id="adminKeyInput" type="password" value="" placeholder="Admin Key" style="width: 130px;" />
+          <input id="adminKeyInput" type="password" value="" placeholder="Admin Key" style="width: 140px;" onchange="saveAdminKey(this.value)" />
         </div>
 
+        <span id="syncIndicator" class="sync-indicator">● Live</span>
+
         <button onclick="fetchData()" class="btn-sync">
-          🔄 Sync Data
+          🔄 Sync
+        </button>
+
+        <button onclick="clearAdminSession()" class="btn-logout" title="Clear saved key and lock session">
+          🔒 Lock
         </button>
       </div>
     </div>
@@ -160,15 +220,15 @@
       </div>
 
       <div class="stat-card">
-        <div class="stat-label">TRACKED CIRCUITS</div>
-        <div id="statCircuits" class="stat-value">0</div>
-        <div style="font-size: 11px; color: #64748b; margin-top: 4px; font-family: monospace;">Threshold: 5 failures → OPEN</div>
+        <div class="stat-label">REGISTERED TENANTS</div>
+        <div id="statTenants" class="stat-value">0</div>
+        <div style="font-size: 11px; color: #64748b; margin-top: 4px; font-family: monospace;">SQLite isolated schema</div>
       </div>
 
       <div class="stat-card">
-        <div class="stat-label">REGISTERED TENANTS</div>
-        <div id="statTenants" class="stat-value">0</div>
-        <div style="font-size: 11px; color: #64748b; margin-top: 4px; font-family: monospace;">Isolated database state</div>
+        <div class="stat-label">TRACKED CIRCUITS</div>
+        <div id="statCircuits" class="stat-value">0</div>
+        <div style="font-size: 11px; color: #64748b; margin-top: 4px; font-family: monospace;">Automatic failure isolation</div>
       </div>
 
       <div class="stat-card">
@@ -181,13 +241,20 @@
     <!-- Key Generated Alert Box -->
     <div id="generatedKeyBox" class="key-alert hidden">
       <div style="color: #00ff87; font-family: monospace; font-size: 12px; font-weight: 700; text-transform: uppercase; margin-bottom: 8px;">
-        🔑 New API Key Generated — Save This Key Now!
+        🔑 New API Key Generated — Save This Key Now! It will NOT be shown again.
       </div>
-      <div style="display: flex; align-items: center; justify-content: space-between; background: #0a0a0f; border: 1px solid rgba(0, 255, 135, 0.4); padding: 12px; border-radius: 10px; font-family: monospace; font-size: 14px; color: #00ff87;">
-        <span id="rawKeyDisplay" style="overflow: hidden; text-overflow: ellipsis;"></span>
-        <button onclick="copyGeneratedKey()" style="padding: 6px 14px; border-radius: 6px; background: #00ff87; color: #0a0a0f; font-weight: 700; border: none; cursor: pointer;">
+      <!-- Raw key -->
+      <div style="display: flex; align-items: center; justify-content: space-between; background: #0a0a0f; border: 1px solid rgba(0, 255, 135, 0.4); padding: 12px; border-radius: 10px; font-family: monospace; font-size: 13px; color: #00ff87; margin-bottom: 10px;">
+        <span id="rawKeyDisplay" style="word-break: break-all;"></span>
+        <button onclick="copyText('rawKeyDisplay', this)" style="padding: 6px 14px; border-radius: 6px; background: #00ff87; color: #0a0a0f; font-weight: 700; border: none; cursor: pointer; flex-shrink: 0; margin-left: 12px;">
           Copy Key
         </button>
+      </div>
+      <!-- Bearer token format helper -->
+      <div style="font-size: 11px; color: #94a3b8; font-family: monospace; margin-bottom: 4px;">📋 Send this complete Bearer token to your customer:</div>
+      <div class="bearer-box">
+        <span id="bearerTokenDisplay"></span>
+        <button class="btn-copy-small" onclick="copyText('bearerTokenDisplay', this)">Copy Bearer</button>
       </div>
     </div>
 
@@ -196,14 +263,20 @@
       <button id="tabBtnAnalytics" onclick="switchTab('analytics')" class="tab-btn active">
         📊 Usage Analytics
       </button>
+      <button id="tabBtnTenants" onclick="switchTab('tenants')" class="tab-btn">
+        🏢 Tenants &amp; Subscriptions
+      </button>
       <button id="tabBtnKeys" onclick="switchTab('keys')" class="tab-btn">
-        🔑 API Keys &amp; Tenants
+        🔑 API Keys
       </button>
       <button id="tabBtnCircuits" onclick="switchTab('circuits')" class="tab-btn">
         ⚡ Circuit Breakers
       </button>
       <button id="tabBtnWebhooks" onclick="switchTab('webhooks')" class="tab-btn">
         🔔 Webhooks
+      </button>
+      <button id="tabBtnAudit" onclick="switchTab('audit')" class="tab-btn">
+        🛡️ Audit Trail
       </button>
     </div>
 
@@ -217,23 +290,26 @@
       </div>
     </div>
 
-    <!-- Tab 2: API Keys & Tenants -->
-    <div id="tabKeys" class="hidden">
-      <div class="form-grid">
-        
-        <!-- Create Tenant Form -->
-        <div class="card">
-          <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">Create New Tenant</h3>
-          <form onsubmit="handleCreateTenant(event)">
-            <div class="form-group">
-              <label class="form-label">Tenant ID</label>
+    <!-- Tab 2: Tenants & Subscriptions -->
+    <div id="tabTenants" class="hidden">
+      <!-- Create Tenant Form -->
+      <div class="card" style="margin-bottom: 24px;">
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">Register New Tenant</h3>
+        <form onsubmit="handleCreateTenant(event)">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; align-items: end; margin-bottom: 16px;">
+            <div class="form-group" style="margin:0;">
+              <label class="form-label">Tenant ID (Slug)</label>
               <input id="inputTenantId" type="text" required placeholder="e.g. acme-corp" class="form-input" />
             </div>
-            <div class="form-group">
+            <div class="form-group" style="margin:0;">
               <label class="form-label">Company / Team Name</label>
               <input id="inputTenantName" type="text" required placeholder="e.g. Acme Corporation" class="form-input" />
             </div>
-            <div class="form-group">
+            <div class="form-group" style="margin:0;">
+              <label class="form-label">Contact Email</label>
+              <input id="inputTenantEmail" type="email" placeholder="admin@acmecorp.com" class="form-input" />
+            </div>
+            <div class="form-group" style="margin:0;">
               <label class="form-label">Subscription Plan</label>
               <select id="inputTenantPlan" class="form-select">
                 <option value="free">Free (1,000 calls/mo)</option>
@@ -242,37 +318,73 @@
                 <option value="team">Team (5,000,000 calls/mo)</option>
               </select>
             </div>
-            <button type="submit" class="btn-submit" style="background: #06b6d4; color: #000;">
-              Create Tenant
-            </button>
-          </form>
-        </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Internal Notes (payment ref, trial end date, etc.)</label>
+            <textarea id="inputTenantNotes" class="form-textarea" placeholder="e.g. Lemon Squeezy order #12345 · Paid 2026-09-27 · Trial ends 2026-10-27"></textarea>
+          </div>
+          <button type="submit" class="btn-submit" style="background: #06b6d4; color: #000; max-width: 220px;">
+            ➕ Create Tenant
+          </button>
+        </form>
+      </div>
 
-        <!-- Generate API Key Form -->
-        <div class="card">
-          <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">Generate Live API Key</h3>
-          <form onsubmit="handleCreateApiKey(event)">
-            <div class="form-group">
-              <label class="form-label">Assign to Tenant</label>
-              <select id="selectKeyTenant" class="form-select">
-                <option value="default-tenant">Default Tenant</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Key Description</label>
-              <input id="inputKeyName" type="text" placeholder="e.g. Production Agent Key" class="form-input" />
-            </div>
-            <button type="submit" class="btn-submit">
-              Generate Key
-            </button>
-          </form>
+      <!-- Registered Tenants Table -->
+      <div class="card">
+        <div class="filter-bar">
+          <h3 style="font-size: 18px; font-weight: 700;">Registered Tenants &amp; Subscriptions</h3>
+          <input type="text" id="searchTenantsInput" placeholder="Filter tenants..." class="search-input" onkeyup="filterTenantsTable()" />
         </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Tenant ID</th>
+                <th>Company / Name</th>
+                <th>Email</th>
+                <th>Plan</th>
+                <th>Quota Usage</th>
+                <th>Status</th>
+                <th>Notes</th>
+                <th style="text-align: right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="tenantsTableBody">
+              <tr><td colspan="8" style="text-align: center; color: #64748b; padding: 24px;">No tenants found.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
 
+    <!-- Tab 3: API Keys Management -->
+    <div id="tabKeys" class="hidden">
+      <!-- Generate API Key Form -->
+      <div class="card" style="margin-bottom: 24px;">
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">Generate Live API Key</h3>
+        <form onsubmit="handleCreateApiKey(event)" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; align-items: end;">
+          <div class="form-group" style="margin:0;">
+            <label class="form-label">Assign to Tenant</label>
+            <select id="selectKeyTenant" class="form-select">
+              <option value="default-tenant">Default Tenant</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin:0;">
+            <label class="form-label">Key Description</label>
+            <input id="inputKeyName" type="text" placeholder="e.g. Production Agent Key" class="form-input" />
+          </div>
+          <button type="submit" class="btn-submit" style="height: 42px;">
+            🔑 Generate Key
+          </button>
+        </form>
       </div>
 
       <!-- API Keys Table -->
       <div class="card">
-        <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 16px;">Active API Keys</h3>
+        <div class="filter-bar">
+          <h3 style="font-size: 18px; font-weight: 700;">Active API Keys</h3>
+          <input type="text" id="searchKeysInput" placeholder="Filter keys..." class="search-input" onkeyup="filterKeysTable()" />
+        </div>
         <div class="table-container">
           <table>
             <thead>
@@ -281,42 +393,61 @@
                 <th>Name</th>
                 <th>Tenant ID</th>
                 <th>Created</th>
+                <th>Last Used</th>
                 <th style="text-align: right;">Action</th>
               </tr>
             </thead>
             <tbody id="apiKeysTableBody">
-              <tr><td colspan="5" style="text-align: center; color: #64748b; padding: 24px;">No API keys found.</td></tr>
+              <tr><td colspan="6" style="text-align: center; color: #64748b; padding: 24px;">No API keys found.</td></tr>
             </tbody>
           </table>
         </div>
       </div>
     </div>
 
-    <!-- Tab 3: Circuit Breakers Grid -->
-    <div id="tabCircuits" class="card hidden">
-      <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 24px;">Circuit Breakers Status Grid</h3>
-      <div id="circuitsGrid" class="circuit-grid">
-        <div style="color: #64748b; font-family: monospace; text-align: center; grid-column: span 3; padding: 24px;">Loading circuits...</div>
+    <!-- Tab 4: Circuit Breakers Grid -->
+    <div id="tabCircuits" class="hidden">
+      <div class="card">
+        <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 24px;">Circuit Breakers Status Grid</h3>
+        <div id="circuitsGrid" class="circuit-grid">
+          <div style="color: #64748b; font-family: monospace; text-align: center; grid-column: span 3; padding: 24px;">Loading circuits...</div>
+        </div>
       </div>
     </div>
 
-    <!-- Tab 4: Webhooks -->
+    <!-- Tab 5: Webhooks -->
     <div id="tabWebhooks" class="hidden">
-      <div class="card" style="margin-bottom: 32px;">
+      <div class="card" style="margin-bottom: 24px;">
         <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">Subscribe New Webhook</h3>
-        <form onsubmit="handleCreateWebhook(event)" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; align-items: end;">
-          <div class="form-group" style="margin: 0;">
-            <label class="form-label">Tenant</label>
-            <select id="selectWebhookTenant" class="form-select">
-              <option value="default-tenant">Default Tenant</option>
-            </select>
+        <form onsubmit="handleCreateWebhook(event)">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; align-items: end; margin-bottom: 16px;">
+            <div class="form-group" style="margin: 0;">
+              <label class="form-label">Tenant</label>
+              <select id="selectWebhookTenant" class="form-select">
+                <option value="default-tenant">Default Tenant</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin: 0;">
+              <label class="form-label">Webhook URL</label>
+              <input id="inputWebhookUrl" type="url" required placeholder="https://api.yourdomain.com/webhooks" class="form-input" />
+            </div>
           </div>
-          <div class="form-group" style="margin: 0;">
-            <label class="form-label">Webhook URL</label>
-            <input id="inputWebhookUrl" type="url" required placeholder="https://api.yourdomain.com/webhooks" class="form-input" />
+          <div class="form-group" style="margin-bottom: 16px;">
+            <label class="form-label">Events to Subscribe</label>
+            <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 8px;">
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-family: monospace; color: #cbd5e1; cursor: pointer;">
+                <input type="checkbox" id="evtCircuit" checked style="accent-color: #00ff87;"> circuit.tripped
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-family: monospace; color: #cbd5e1; cursor: pointer;">
+                <input type="checkbox" id="evtAnomaly" checked style="accent-color: #00ff87;"> anomaly.detected
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-family: monospace; color: #cbd5e1; cursor: pointer;">
+                <input type="checkbox" id="evtQuota" checked style="accent-color: #00ff87;"> quota.warning
+              </label>
+            </div>
           </div>
-          <button type="submit" class="btn-submit" style="background: #a855f7; color: #fff;">
-            Add Webhook
+          <button type="submit" class="btn-submit" style="background: #a855f7; color: #fff; max-width: 200px;">
+            🔔 Add Webhook
           </button>
         </form>
       </div>
@@ -330,11 +461,38 @@
                 <th>ID</th>
                 <th>Tenant</th>
                 <th>URL</th>
+                <th>Events</th>
                 <th style="text-align: right;">Action</th>
               </tr>
             </thead>
             <tbody id="webhooksTableBody">
-              <tr><td colspan="4" style="text-align: center; color: #64748b; padding: 24px;">No webhooks configured.</td></tr>
+              <tr><td colspan="5" style="text-align: center; color: #64748b; padding: 24px;">No webhooks configured.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 6: Audit Trail -->
+    <div id="tabAudit" class="hidden">
+      <div class="card">
+        <div class="filter-bar">
+          <h3 style="font-size: 18px; font-weight: 700;">Security Audit Trail</h3>
+          <input type="text" id="searchAuditInput" placeholder="Filter audit logs..." class="search-input" onkeyup="filterAuditTable()" />
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Action</th>
+                <th>Tenant ID</th>
+                <th>Details</th>
+                <th>IP Address</th>
+              </tr>
+            </thead>
+            <tbody id="auditTableBody">
+              <tr><td colspan="5" style="text-align: center; color: #64748b; padding: 24px;">No audit events recorded yet.</td></tr>
             </tbody>
           </table>
         </div>
@@ -343,44 +501,179 @@
 
   </div>
 
-  <script>
-    document.getElementById('serverUrlInput').value = window.location.origin;
+  <!-- Admin Key Authentication Modal Overlay -->
+  <div id="authModal" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <h3 style="font-size: 18px; font-weight: 800; color: #ffffff; margin-bottom: 8px;">🛡️ Admin Authentication Required</h3>
+      <p style="font-size: 13px; color: #94a3b8; margin-bottom: 20px;">
+        This AgentGuard deployment is protected. Enter your <code style="color: #00ff87;">AGENTGUARD_ADMIN_KEY</code> to access the console.
+      </p>
+      <form onsubmit="handleAuthSubmit(event)">
+        <div class="form-group">
+          <label class="form-label">Master Admin Key</label>
+          <input id="modalAdminKey" type="password" required placeholder="Paste your AGENTGUARD_ADMIN_KEY here" class="form-input" autofocus />
+        </div>
+        <button type="submit" class="btn-submit">
+          Unlock Admin Console
+        </button>
+      </form>
+    </div>
+  </div>
 
-    function switchTab(tabName) {
-      ['analytics', 'keys', 'circuits', 'webhooks'].forEach(t => {
-        const tabEl = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
-        const btnEl = document.getElementById('tabBtn' + t.charAt(0).toUpperCase() + t.slice(1));
-        if (t === tabName) {
-          tabEl.classList.remove('hidden');
-          btnEl.className = 'tab-btn active';
+  <!-- Notes Edit Modal -->
+  <div id="notesModal" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <h3 style="font-size: 16px; font-weight: 800; color: #ffffff; margin-bottom: 8px;">📝 Edit Tenant Notes</h3>
+      <p id="notesTenantLabel" style="font-size: 12px; font-family: monospace; color: #94a3b8; margin-bottom: 16px;"></p>
+      <form onsubmit="handleSaveNotes(event)">
+        <input type="hidden" id="notesTenantId" />
+        <div class="form-group">
+          <label class="form-label">Internal Notes</label>
+          <textarea id="notesTextarea" class="form-textarea" rows="5" placeholder="Payment ref, trial dates, contact info, etc."></textarea>
+        </div>
+        <div style="display: flex; gap: 12px;">
+          <button type="submit" class="btn-submit" style="max-width: 160px;">Save Notes</button>
+          <button type="button" onclick="closeNotesModal()" style="flex: 1; padding: 12px; border-radius: 10px; background: #1e1e2e; border: 1px solid #334155; color: #94a3b8; cursor: pointer; font-size: 14px;">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // ─── INIT ─────────────────────────────────────────────────────────────────
+    const initialOrigin = window.location.origin;
+    if (initialOrigin && initialOrigin.startsWith('http')) {
+      document.getElementById('serverUrlInput').value = initialOrigin;
+    } else {
+      document.getElementById('serverUrlInput').value = 'http://localhost:3000';
+    }
+
+    const savedKey = sessionStorage.getItem('agentguard_admin_key');
+    if (savedKey) {
+      document.getElementById('adminKeyInput').value = savedKey;
+    }
+
+    // ─── AUTH ─────────────────────────────────────────────────────────────────
+    function saveAdminKey(val) {
+      if (val !== undefined && val !== null) {
+        const trimmed = val.trim();
+        if (trimmed) {
+          sessionStorage.setItem('agentguard_admin_key', trimmed);
         } else {
-          tabEl.classList.add('hidden');
-          btnEl.className = 'tab-btn';
+          sessionStorage.removeItem('agentguard_admin_key');
+        }
+      }
+    }
+
+    function clearAdminSession() {
+      sessionStorage.removeItem('agentguard_admin_key');
+      document.getElementById('adminKeyInput').value = '';
+      document.getElementById('modalAdminKey').value = '';
+      document.getElementById('authModal').classList.remove('hidden');
+    }
+
+    function handleAuthSubmit(e) {
+      e.preventDefault();
+      const val = document.getElementById('modalAdminKey').value.trim();
+      document.getElementById('adminKeyInput').value = val;
+      saveAdminKey(val);
+      document.getElementById('authModal').classList.add('hidden');
+      fetchData();
+    }
+
+    // ─── TAB SWITCHING ────────────────────────────────────────────────────────
+    function switchTab(targetTab) {
+      const tabs = {
+        analytics: { panelId: 'tabAnalytics', btnId: 'tabBtnAnalytics' },
+        tenants:   { panelId: 'tabTenants',   btnId: 'tabBtnTenants' },
+        keys:      { panelId: 'tabKeys',       btnId: 'tabBtnKeys' },
+        circuits:  { panelId: 'tabCircuits',   btnId: 'tabBtnCircuits' },
+        webhooks:  { panelId: 'tabWebhooks',   btnId: 'tabBtnWebhooks' },
+        audit:     { panelId: 'tabAudit',      btnId: 'tabBtnAudit' }
+      };
+      Object.keys(tabs).forEach(key => {
+        const panel = document.getElementById(tabs[key].panelId);
+        const btn   = document.getElementById(tabs[key].btnId);
+        if (panel && btn) {
+          if (key === targetTab) {
+            panel.classList.remove('hidden');
+            panel.style.display = 'block';
+            btn.classList.add('active');
+          } else {
+            panel.classList.add('hidden');
+            panel.style.display = 'none';
+            btn.classList.remove('active');
+          }
         }
       });
     }
 
-    async function fetchData() {
-      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
-      const adminKey = document.getElementById('adminKeyInput').value.trim();
-      const headers = { 'Content-Type': 'application/json' };
-      if (adminKey) headers['Authorization'] = `Bearer ${adminKey}`;
+    document.addEventListener('DOMContentLoaded', () => {
+      ['analytics', 'tenants', 'keys', 'circuits', 'webhooks', 'audit'].forEach(t => {
+        const btnId = 'tabBtn' + t.charAt(0).toUpperCase() + t.slice(1);
+        const btn = document.getElementById(btnId);
+        if (btn) btn.addEventListener('click', e => { e.preventDefault(); switchTab(t); });
+      });
+    });
 
+    // ─── STATE ────────────────────────────────────────────────────────────────
+    let allTenantsCache = [];
+    let allKeysCache    = [];
+    let allAuditCache   = [];
+    let usageStatsCache = {};
+
+    // ─── HELPERS ──────────────────────────────────────────────────────────────
+    function getServerUrl() { return document.getElementById('serverUrlInput').value.replace(/\/$/, ''); }
+    function getAdminKey()  { return document.getElementById('adminKeyInput').value.trim(); }
+    function authHeaders()  { const k = getAdminKey(); return k ? { Authorization: `Bearer ${k}` } : {}; }
+    function handleAuth(res) { if (res && res.status === 401) { document.getElementById('authModal').classList.remove('hidden'); return true; } return false; }
+
+    // Copy text from element and provide visual feedback
+    function copyText(elementId, btn) {
+      const text = document.getElementById(elementId).innerText;
+      navigator.clipboard.writeText(text).then(() => {
+        const original = btn.innerText;
+        btn.innerText = '✓ Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.innerText = original; btn.classList.remove('copied'); }, 2000);
+      }).catch(() => {
+        alert('Copy failed — please select and copy manually:\n\n' + text);
+      });
+    }
+
+    // ─── FETCH DATA ───────────────────────────────────────────────────────────
+    async function fetchData() {
+      const serverUrl = getServerUrl();
+      const headers   = authHeaders();
+      const indicator = document.getElementById('syncIndicator');
       const errorAlert = document.getElementById('errorAlert');
+
+      indicator.textContent = '⟳ Syncing…';
+      indicator.classList.add('syncing');
       errorAlert.classList.add('hidden');
 
       try {
-        const [usageRes, tenantsRes, keysRes, circuitsRes, webhooksRes] = await Promise.all([
-          fetch(`${serverUrl}/admin/usage`, { headers }).catch(() => null),
-          fetch(`${serverUrl}/admin/tenants`, { headers }).catch(() => null),
-          fetch(`${serverUrl}/admin/api-keys`, { headers }).catch(() => null),
-          fetch(`${serverUrl}/admin/circuits`, { headers }).catch(() => null),
-          fetch(`${serverUrl}/admin/webhooks`, { headers }).catch(() => null),
+        const [usageRes, tenantsRes, keysRes, circuitsRes, webhooksRes, auditRes] = await Promise.all([
+          fetch(`${serverUrl}/admin/usage`,      { headers }).catch(() => null),
+          fetch(`${serverUrl}/admin/tenants`,    { headers }).catch(() => null),
+          fetch(`${serverUrl}/admin/api-keys`,   { headers }).catch(() => null),
+          fetch(`${serverUrl}/admin/circuits`,   { headers }).catch(() => null),
+          fetch(`${serverUrl}/admin/webhooks`,   { headers }).catch(() => null),
+          fetch(`${serverUrl}/admin/audit-logs`, { headers }).catch(() => null),
         ]);
 
+        if ([usageRes, tenantsRes, keysRes, circuitsRes, webhooksRes, auditRes].some(r => r && r.status === 401)) {
+          document.getElementById('authModal').classList.remove('hidden');
+          indicator.textContent = '● Auth Required';
+          indicator.classList.remove('syncing');
+          return;
+        }
+
+        // ── 1. Usage Analytics ───────────────────────────────────────────────
         if (usageRes && usageRes.ok) {
           const usage = await usageRes.json();
-          const totalCalls = usage.total_calls || (usage.tenants ? usage.tenants.reduce((acc, t) => acc + t.total_calls, 0) : 0);
+          usageStatsCache = usage;
+          const totalCalls = usage.total_calls || (usage.tenants ? usage.tenants.reduce((a, t) => a + t.total_calls, 0) : 0);
           document.getElementById('statTotalCalls').innerText = totalCalls.toLocaleString();
           document.getElementById('statLatency').innerText = usage.avg_response_time_ms ? `${usage.avg_response_time_ms.toFixed(1)}ms` : '< 10ms';
 
@@ -392,10 +685,10 @@
                 <div>
                   <div style="display: flex; justify-content: space-between; font-size: 12px; font-family: monospace; margin-bottom: 4px;">
                     <span style="font-weight: 700; color: #00ff87;">${t.tool_name}</span>
-                    <span>${t.count} calls (${percent}%)</span>
+                    <span>${t.count.toLocaleString()} calls (${percent}%)</span>
                   </div>
-                  <div style="width: 100%; background: #0a0a0f; border-radius: 9999px; height: 8px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.05);">
-                    <div style="background: #00ff87; height: 100%; width: ${percent}%;"></div>
+                  <div style="width: 100%; background: #0a0a0f; border-radius: 9999px; height: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.05);">
+                    <div style="background: linear-gradient(90deg, #00ff87, #06b6d4); height: 100%; width: ${percent}%; border-radius: 9999px;"></div>
                   </div>
                 </div>
               `;
@@ -405,77 +698,74 @@
           }
         }
 
+        // ── 2. Tenants ───────────────────────────────────────────────────────
         if (tenantsRes && tenantsRes.ok) {
           const d = await tenantsRes.json();
-          const tenantsList = d.tenants || [];
-          document.getElementById('statTenants').innerText = tenantsList.length || 1;
+          allTenantsCache = d.tenants || [];
+          document.getElementById('statTenants').innerText = allTenantsCache.length || 1;
 
-          const optionsHtml = tenantsList.map(t => `<option value="${t.tenant_id}">${t.name} (${t.tenant_id}) — ${t.plan.toUpperCase()}</option>`).join('');
-          document.getElementById('selectKeyTenant').innerHTML = optionsHtml || '<option value="default-tenant">Default Tenant</option>';
+          // Populate tenant dropdowns for Keys and Webhooks forms
+          const optionsHtml = allTenantsCache.map(t => `<option value="${t.tenant_id}">${t.name} (${t.tenant_id}) — ${t.plan.toUpperCase()}</option>`).join('');
+          document.getElementById('selectKeyTenant').innerHTML     = optionsHtml || '<option value="default-tenant">Default Tenant</option>';
           document.getElementById('selectWebhookTenant').innerHTML = optionsHtml || '<option value="default-tenant">Default Tenant</option>';
+
+          // Merge in usage stats per tenant if available
+          const tenantUsage = (usageStatsCache.tenants || []).reduce((m, t) => { m[t.tenant_id] = t; return m; }, {});
+          renderTenantsTable(allTenantsCache, tenantUsage);
         }
 
+        // ── 3. API Keys ──────────────────────────────────────────────────────
         if (keysRes && keysRes.ok) {
           const d = await keysRes.json();
-          const keys = d.api_keys || [];
-          const tbody = document.getElementById('apiKeysTableBody');
-          if (keys.length > 0) {
-            tbody.innerHTML = keys.map(k => `
-              <tr>
-                <td style="font-weight: 700; color: #00ff87;">${k.prefix}</td>
-                <td style="color: #ffffff;">${k.name}</td>
-                <td>${k.tenant_id}</td>
-                <td style="color: #64748b;">${k.created_at ? k.created_at.slice(0, 10) : ''}</td>
-                <td style="text-align: right;">
-                  <button onclick="handleRevokeKey('${k.id}')" style="padding: 4px 10px; border-radius: 4px; background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); font-size: 11px; cursor: pointer;">
-                    Revoke
-                  </button>
-                </td>
-              </tr>
-            `).join('');
-          } else {
-            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 24px;">No API keys found. Generate a key above.</td></tr>';
-          }
+          allKeysCache = d.api_keys || [];
+          renderKeysTable(allKeysCache);
         }
 
+        // ── 4. Circuit Breakers ──────────────────────────────────────────────
         if (circuitsRes && circuitsRes.ok) {
           const d = await circuitsRes.json();
           const circuits = d.circuits || [];
-          const openCount = circuits.filter(c => c.state === 'OPEN').length;
-          document.getElementById('statCircuits').innerHTML = `${circuits.length} ${openCount > 0 ? `<span style="font-size: 11px; color: #f87171; background: rgba(239,68,68,0.2); padding: 2px 8px; border-radius: 9999px; margin-left: 6px;">${openCount} OPEN</span>` : ''}`;
+          const openCount     = circuits.filter(c => c.state === 'OPEN').length;
+          const halfOpenCount = circuits.filter(c => c.state === 'HALF_OPEN').length;
+          document.getElementById('statCircuits').innerHTML =
+            `${circuits.length}${openCount > 0 ? ` <span style="font-size: 11px; color: #f87171; background: rgba(239,68,68,0.2); padding: 2px 8px; border-radius: 9999px; margin-left: 6px;">${openCount} OPEN</span>` : ''}`;
 
           const grid = document.getElementById('circuitsGrid');
           if (circuits.length > 0) {
-            grid.innerHTML = circuits.map(c => `
-              <div class="circuit-card">
-                <div>
-                  <div class="circuit-header">
-                    <span style="font-family: monospace; font-size: 12px; font-weight: 700; color: #ffffff;">${c.name}</span>
-                    <span class="state-badge ${c.state === 'CLOSED' ? 'state-closed' : 'state-open'}">${c.state}</span>
-                  </div>
-                  <div style="font-size: 12px; font-family: monospace; color: #94a3b8; display: flex; flex-direction: column; gap: 4px;">
-                    <div style="display: flex; justify-content: space-between;">
-                      <span>Failures:</span>
-                      <span style="color: ${c.failure_count > 0 ? '#f87171' : '#cbd5e1'}; font-weight: 700;">${c.failure_count} / 5</span>
+            grid.innerHTML = circuits.map(c => {
+              const stateClass = c.state === 'CLOSED' ? 'state-closed' : c.state === 'HALF_OPEN' ? 'state-half-open' : 'state-open';
+              return `
+                <div class="circuit-card">
+                  <div>
+                    <div class="circuit-header">
+                      <span style="font-family: monospace; font-size: 12px; font-weight: 700; color: #ffffff;">${c.name}</span>
+                      <span class="state-badge ${stateClass}">${c.state}</span>
                     </div>
-                    <div style="display: flex; justify-content: space-between;">
-                      <span>Successes:</span>
-                      <span style="color: #cbd5e1;">${c.success_count}</span>
+                    <div style="font-size: 12px; font-family: monospace; color: #94a3b8; display: flex; flex-direction: column; gap: 4px;">
+                      <div style="display: flex; justify-content: space-between;">
+                        <span>Failures:</span>
+                        <span style="color: ${c.failure_count > 0 ? '#f87171' : '#cbd5e1'}; font-weight: 700;">${c.failure_count} / 5</span>
+                      </div>
+                      <div style="display: flex; justify-content: space-between;">
+                        <span>Successes:</span>
+                        <span style="color: #cbd5e1;">${c.success_count}</span>
+                      </div>
                     </div>
                   </div>
+                  ${c.state !== 'CLOSED' ? `
+                    <button onclick="handleResetCircuit('${encodeURIComponent(c.name)}')" class="btn-reset">
+                      ↺ Reset Circuit
+                    </button>
+                  ` : ''}
                 </div>
-                ${c.state !== 'CLOSED' ? `
-                  <button onclick="handleResetCircuit('${encodeURIComponent(c.name)}')" class="btn-reset">
-                    Reset Circuit
-                  </button>
-                ` : ''}
-              </div>
-            `).join('');
+              `;
+            }).join('');
           } else {
-            grid.innerHTML = '<div style="color: #64748b; font-family: monospace; text-align: center; grid-column: span 3; padding: 24px;">No circuits tracked yet.</div>';
+            grid.innerHTML = '<div style="color: #64748b; font-family: monospace; text-align: center; grid-column: span 3; padding: 24px;">No circuits tracked yet. They appear here once your agents start using the circuit_breaker tool.</div>';
           }
         }
 
+        // ── 5. Webhooks ──────────────────────────────────────────────────────
         if (webhooksRes && webhooksRes.ok) {
           const d = await webhooksRes.json();
           const webhooks = d.webhooks || [];
@@ -485,133 +775,352 @@
               <tr>
                 <td style="font-weight: 700; color: #c084fc;">${w.id}</td>
                 <td style="color: #ffffff;">${w.tenant_id}</td>
-                <td style="color: #cbd5e1;">${w.url}</td>
+                <td style="color: #cbd5e1; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${w.url}</td>
+                <td>
+                  <div class="event-badges">
+                    ${(w.events || []).map(ev => `<span class="event-badge">${ev}</span>`).join('')}
+                  </div>
+                </td>
                 <td style="text-align: right;">
-                  <button onclick="handleDeleteWebhook('${w.id}')" style="padding: 4px 10px; border-radius: 4px; background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); font-size: 11px; cursor: pointer;">
+                  <button onclick="handleDeleteWebhook('${w.id}')" style="padding: 4px 10px; border-radius: 4px; background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); font-size: 11px; cursor: pointer; font-family: monospace;">
                     Delete
                   </button>
                 </td>
               </tr>
             `).join('');
           } else {
-            tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #64748b; padding: 24px;">No webhooks configured.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 24px;">No webhooks configured.</td></tr>';
           }
         }
 
+        // ── 6. Audit Trail ───────────────────────────────────────────────────
+        if (auditRes && auditRes.ok) {
+          const d = await auditRes.json();
+          allAuditCache = d.audit_logs || [];
+          renderAuditTable(allAuditCache);
+        }
+
+        indicator.textContent = '● Live · ' + new Date().toLocaleTimeString();
+        indicator.classList.remove('syncing');
+
       } catch (err) {
-        errorAlert.innerText = 'Error connecting to server: ' + err.message;
+        errorAlert.innerText = '⚠ Error connecting to server: ' + err.message + ' — Is the server running at ' + getServerUrl() + '?';
         errorAlert.classList.remove('hidden');
+        indicator.textContent = '● Disconnected';
+        indicator.classList.remove('syncing');
       }
     }
 
+    // ─── RENDER FUNCTIONS ─────────────────────────────────────────────────────
+    function renderTenantsTable(list, tenantUsage = {}) {
+      const tbody = document.getElementById('tenantsTableBody');
+      if (!tbody) return;
+      if (list.length > 0) {
+        tbody.innerHTML = list.map(t => {
+          const usageData = tenantUsage[t.tenant_id] || {};
+          const used  = usageData.total_calls || 0;
+          const quota = t.monthly_quota || 1000;
+          const pct   = Math.min(100, Math.round((used / quota) * 100));
+          const barColor = pct >= 90 ? '#f87171' : pct >= 70 ? '#fbbf24' : '#00ff87';
+
+          return `
+            <tr>
+              <td style="font-weight: 700; color: #06b6d4;">${t.tenant_id}</td>
+              <td style="color: #ffffff; font-weight: 600;">${t.name}</td>
+              <td style="color: #94a3b8; font-size: 12px;">${t.email || '—'}</td>
+              <td>
+                <select onchange="handleUpdateTenantPlan('${t.tenant_id}', this.value)" style="background: #0a0a0f; border: 1px solid #334155; color: #00ff87; padding: 4px 8px; border-radius: 6px; font-family: monospace; font-size: 12px;">
+                  <option value="free"    ${t.plan === 'free'    ? 'selected' : ''}>FREE</option>
+                  <option value="starter" ${t.plan === 'starter' ? 'selected' : ''}>STARTER</option>
+                  <option value="pro"     ${t.plan === 'pro'     ? 'selected' : ''}>PRO</option>
+                  <option value="team"    ${t.plan === 'team'    ? 'selected' : ''}>TEAM</option>
+                </select>
+              </td>
+              <td>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <div class="quota-bar-wrap"><div class="quota-bar" style="width: ${pct}%; background: ${barColor};"></div></div>
+                  <span style="font-size: 11px; font-family: monospace; color: #94a3b8;">${used.toLocaleString()}/${quota.toLocaleString()}</span>
+                </div>
+              </td>
+              <td>
+                <span style="font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 700; ${t.status === 'active' ? 'background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3);' : 'background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3);'}">
+                  ${t.status.toUpperCase()}
+                </span>
+              </td>
+              <td style="max-width: 160px; overflow: hidden;">
+                <span style="font-size: 11px; color: #64748b; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${(t.notes || '').replace(/"/g, '&quot;')}">${t.notes || '—'}</span>
+                <button onclick="openNotesModal('${t.tenant_id}', '${t.name}', ${JSON.stringify(t.notes || '')})" style="font-size: 10px; color: #06b6d4; background: none; border: none; cursor: pointer; padding: 2px 0; font-family: monospace;">edit</button>
+              </td>
+              <td style="text-align: right; white-space: nowrap;">
+                <button onclick="handleToggleTenantStatus('${t.tenant_id}', '${t.status === 'active' ? 'suspended' : 'active'}')"
+                  style="padding: 4px 10px; border-radius: 4px; background: ${t.status === 'active' ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.15)'}; color: ${t.status === 'active' ? '#f87171' : '#4ade80'}; border: 1px solid ${t.status === 'active' ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}; font-size: 11px; cursor: pointer; margin-right: 6px; font-family: monospace;">
+                  ${t.status === 'active' ? 'Suspend' : 'Activate'}
+                </button>
+                ${t.tenant_id !== 'default-tenant' ? `
+                  <button onclick="handleDeleteTenant('${t.tenant_id}', '${t.name}')"
+                    style="padding: 4px 10px; border-radius: 4px; background: rgba(239,68,68,0.1); color: #f87171; border: 1px solid rgba(239,68,68,0.2); font-size: 11px; cursor: pointer; font-family: monospace;">
+                    Delete
+                  </button>
+                ` : ''}
+              </td>
+            </tr>
+          `;
+        }).join('');
+      } else {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #64748b; padding: 24px;">No tenants matching filter.</td></tr>';
+      }
+    }
+
+    function renderKeysTable(list) {
+      const tbody = document.getElementById('apiKeysTableBody');
+      if (!tbody) return;
+      if (list.length > 0) {
+        tbody.innerHTML = list.map(k => `
+          <tr>
+            <td style="font-weight: 700; color: #00ff87;">${k.prefix}</td>
+            <td style="color: #ffffff;">${k.name}</td>
+            <td>${k.tenant_id}</td>
+            <td style="color: #64748b;">${k.created_at ? k.created_at.slice(0, 10) : ''}</td>
+            <td style="color: #64748b;">${k.last_used_at ? k.last_used_at.slice(0, 10) : 'Never'}</td>
+            <td style="text-align: right;">
+              <button onclick="handleRevokeKey('${k.id}')" style="padding: 4px 10px; border-radius: 4px; background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); font-size: 11px; cursor: pointer; font-family: monospace;">
+                Revoke
+              </button>
+            </td>
+          </tr>
+        `).join('');
+      } else {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #64748b; padding: 24px;">No API keys matching filter.</td></tr>';
+      }
+    }
+
+    function renderAuditTable(list) {
+      const tbody = document.getElementById('auditTableBody');
+      if (!tbody) return;
+      if (list.length > 0) {
+        tbody.innerHTML = list.map(a => `
+          <tr>
+            <td style="color: #94a3b8; font-size: 11px; white-space: nowrap;">${a.created_at ? a.created_at.replace('T', ' ').slice(0, 19) : ''}</td>
+            <td><span style="background: rgba(6,182,212,0.15); color: #06b6d4; border: 1px solid rgba(6,182,212,0.3); padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 11px;">${a.action}</span></td>
+            <td style="color: #ffffff;">${a.tenant_id || '—'}</td>
+            <td style="color: #cbd5e1;">${a.details || '—'}</td>
+            <td style="color: #64748b; font-size: 11px;">${a.ip_address || 'local'}</td>
+          </tr>
+        `).join('');
+      } else {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 24px;">No audit events recorded yet.</td></tr>';
+      }
+    }
+
+    // ─── FILTER FUNCTIONS ─────────────────────────────────────────────────────
+    function filterTenantsTable() {
+      const q = document.getElementById('searchTenantsInput').value.toLowerCase().trim();
+      const tenantUsage = (usageStatsCache.tenants || []).reduce((m, t) => { m[t.tenant_id] = t; return m; }, {});
+      renderTenantsTable(
+        allTenantsCache.filter(t => t.tenant_id.toLowerCase().includes(q) || t.name.toLowerCase().includes(q) || t.plan.toLowerCase().includes(q) || (t.email || '').toLowerCase().includes(q)),
+        tenantUsage
+      );
+    }
+
+    function filterKeysTable() {
+      const q = document.getElementById('searchKeysInput').value.toLowerCase().trim();
+      renderKeysTable(allKeysCache.filter(k => k.prefix.toLowerCase().includes(q) || k.name.toLowerCase().includes(q) || k.tenant_id.toLowerCase().includes(q)));
+    }
+
+    function filterAuditTable() {
+      const q = document.getElementById('searchAuditInput').value.toLowerCase().trim();
+      renderAuditTable(allAuditCache.filter(a => a.action.toLowerCase().includes(q) || (a.tenant_id && a.tenant_id.toLowerCase().includes(q)) || (a.details && a.details.toLowerCase().includes(q))));
+    }
+
+    // ─── ACTION HANDLERS ──────────────────────────────────────────────────────
     async function handleCreateTenant(e) {
       e.preventDefault();
-      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
-      const adminKey = document.getElementById('adminKeyInput').value.trim();
       const tenant_id = document.getElementById('inputTenantId').value.trim();
-      const name = document.getElementById('inputTenantName').value.trim();
-      const plan = document.getElementById('inputTenantPlan').value;
+      const name      = document.getElementById('inputTenantName').value.trim();
+      const plan      = document.getElementById('inputTenantPlan').value;
+      const email     = document.getElementById('inputTenantEmail').value.trim();
+      const notes     = document.getElementById('inputTenantNotes').value.trim();
 
       try {
-        const res = await fetch(`${serverUrl}/admin/tenants`, {
+        const res = await fetch(`${getServerUrl()}/admin/tenants`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
-          body: JSON.stringify({ tenant_id, name, plan }),
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ tenant_id, name, plan, email, notes }),
         });
+        if (handleAuth(res)) return;
         if (res.ok) {
-          document.getElementById('inputTenantId').value = '';
-          document.getElementById('inputTenantName').value = '';
+          document.getElementById('inputTenantId').value    = '';
+          document.getElementById('inputTenantName').value  = '';
+          document.getElementById('inputTenantEmail').value = '';
+          document.getElementById('inputTenantNotes').value = '';
           fetchData();
+        } else {
+          const d = await res.json();
+          alert('Error: ' + (d.error || 'Unknown error'));
         }
-      } catch (err) { alert('Failed: ' + err.message); }
+      } catch (err) { alert('Network error: ' + err.message); }
+    }
+
+    async function handleUpdateTenantPlan(tenant_id, plan) {
+      if (!confirm(`Change plan for '${tenant_id}' to '${plan.toUpperCase()}'?`)) { fetchData(); return; }
+      try {
+        const res = await fetch(`${getServerUrl()}/admin/tenants/${tenant_id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ plan }),
+        });
+        handleAuth(res);
+        fetchData();
+      } catch (err) { alert('Network error: ' + err.message); }
+    }
+
+    async function handleToggleTenantStatus(tenant_id, status) {
+      try {
+        const res = await fetch(`${getServerUrl()}/admin/tenants/${tenant_id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ status }),
+        });
+        handleAuth(res);
+        fetchData();
+      } catch (err) { alert('Network error: ' + err.message); }
+    }
+
+    async function handleDeleteTenant(tenant_id, name) {
+      if (!confirm(`⚠️ PERMANENTLY DELETE tenant '${name}' (${tenant_id})?\n\nThis will also delete all their API keys and webhooks.\n\nThis action cannot be undone.`)) return;
+      try {
+        const res = await fetch(`${getServerUrl()}/admin/tenants/${tenant_id}`, {
+          method: 'DELETE',
+          headers: authHeaders(),
+        });
+        handleAuth(res);
+        if (res.ok) {
+          fetchData();
+        } else {
+          const d = await res.json();
+          alert('Error: ' + (d.error || 'Delete failed'));
+        }
+      } catch (err) { alert('Network error: ' + err.message); }
+    }
+
+    // Notes modal
+    function openNotesModal(tenantId, tenantName, currentNotes) {
+      document.getElementById('notesTenantId').value     = tenantId;
+      document.getElementById('notesTenantLabel').innerText = `Tenant: ${tenantName} (${tenantId})`;
+      document.getElementById('notesTextarea').value     = currentNotes || '';
+      document.getElementById('notesModal').classList.remove('hidden');
+    }
+    function closeNotesModal() {
+      document.getElementById('notesModal').classList.add('hidden');
+    }
+    async function handleSaveNotes(e) {
+      e.preventDefault();
+      const tenant_id = document.getElementById('notesTenantId').value;
+      const notes     = document.getElementById('notesTextarea').value.trim();
+      try {
+        const res = await fetch(`${getServerUrl()}/admin/tenants/${tenant_id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ notes }),
+        });
+        handleAuth(res);
+        closeNotesModal();
+        fetchData();
+      } catch (err) { alert('Network error: ' + err.message); }
     }
 
     async function handleCreateApiKey(e) {
       e.preventDefault();
-      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
-      const adminKey = document.getElementById('adminKeyInput').value.trim();
       const tenant_id = document.getElementById('selectKeyTenant').value;
-      const name = document.getElementById('inputKeyName').value.trim() || 'New Key';
+      const name      = document.getElementById('inputKeyName').value.trim() || 'Production Key';
+      const tenantName = (allTenantsCache.find(t => t.tenant_id === tenant_id) || {}).name || tenant_id;
 
       try {
-        const res = await fetch(`${serverUrl}/admin/api-keys`, {
+        const res = await fetch(`${getServerUrl()}/admin/api-keys`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ tenant_id, name }),
         });
+        if (handleAuth(res)) return;
         if (res.ok) {
           const d = await res.json();
-          document.getElementById('rawKeyDisplay').innerText = d.api_key;
+          const rawKey     = d.api_key;
+          const bearerFmt  = `${tenant_id}:production:prod:${rawKey}`;
+          document.getElementById('rawKeyDisplay').innerText    = rawKey;
+          document.getElementById('bearerTokenDisplay').innerText = bearerFmt;
           document.getElementById('generatedKeyBox').classList.remove('hidden');
           document.getElementById('inputKeyName').value = '';
           fetchData();
+          // Auto-scroll to key display
+          document.getElementById('generatedKeyBox').scrollIntoView({ behavior: 'smooth' });
+        } else {
+          const d = await res.json();
+          alert('Error: ' + (d.error || 'Key creation failed'));
         }
-      } catch (err) { alert('Failed: ' + err.message); }
-    }
-
-    function copyGeneratedKey() {
-      const keyText = document.getElementById('rawKeyDisplay').innerText;
-      navigator.clipboard.writeText(keyText);
-      alert('API Key copied to clipboard!');
+      } catch (err) { alert('Network error: ' + err.message); }
     }
 
     async function handleRevokeKey(id) {
-      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
-      const adminKey = document.getElementById('adminKeyInput').value.trim();
+      if (!confirm('Revoke this API key? Any agents using it will immediately lose access.')) return;
       try {
-        await fetch(`${serverUrl}/admin/api-keys/${id}`, {
+        const res = await fetch(`${getServerUrl()}/admin/api-keys/${id}`, {
           method: 'DELETE',
-          headers: { ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
+          headers: authHeaders(),
         });
+        handleAuth(res);
         fetchData();
-      } catch (err) { alert('Failed: ' + err.message); }
+      } catch (err) { alert('Network error: ' + err.message); }
     }
 
     async function handleResetCircuit(circuitName) {
-      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
-      const adminKey = document.getElementById('adminKeyInput').value.trim();
       try {
-        await fetch(`${serverUrl}/admin/circuits/${circuitName}/reset`, {
+        const res = await fetch(`${getServerUrl()}/admin/circuits/${circuitName}/reset`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
         });
+        handleAuth(res);
         fetchData();
-      } catch (err) { alert('Failed: ' + err.message); }
+      } catch (err) { alert('Network error: ' + err.message); }
     }
 
     async function handleCreateWebhook(e) {
       e.preventDefault();
-      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
-      const adminKey = document.getElementById('adminKeyInput').value.trim();
       const tenant_id = document.getElementById('selectWebhookTenant').value;
-      const url = document.getElementById('inputWebhookUrl').value.trim();
+      const url       = document.getElementById('inputWebhookUrl').value.trim();
+      const events    = [];
+      if (document.getElementById('evtCircuit').checked) events.push('circuit.tripped');
+      if (document.getElementById('evtAnomaly').checked) events.push('anomaly.detected');
+      if (document.getElementById('evtQuota').checked)   events.push('quota.warning');
+      if (events.length === 0) { alert('Select at least one event to subscribe to.'); return; }
 
       try {
-        await fetch(`${serverUrl}/admin/webhooks`, {
+        const res = await fetch(`${getServerUrl()}/admin/webhooks`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
-          body: JSON.stringify({ tenant_id, url, events: ['circuit.tripped', 'anomaly.detected', 'quota.warning'] }),
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ tenant_id, url, events }),
         });
+        if (handleAuth(res)) return;
         document.getElementById('inputWebhookUrl').value = '';
         fetchData();
-      } catch (err) { alert('Failed: ' + err.message); }
+      } catch (err) { alert('Network error: ' + err.message); }
     }
 
     async function handleDeleteWebhook(id) {
-      const serverUrl = document.getElementById('serverUrlInput').value.replace(/\/$/, '');
-      const adminKey = document.getElementById('adminKeyInput').value.trim();
+      if (!confirm('Delete this webhook subscription?')) return;
       try {
-        await fetch(`${serverUrl}/admin/webhooks/${id}`, {
+        const res = await fetch(`${getServerUrl()}/admin/webhooks/${id}`, {
           method: 'DELETE',
-          headers: { ...(adminKey && { Authorization: `Bearer ${adminKey}` }) },
+          headers: authHeaders(),
         });
+        handleAuth(res);
         fetchData();
-      } catch (err) { alert('Failed: ' + err.message); }
+      } catch (err) { alert('Network error: ' + err.message); }
     }
 
-    // Load data on page load
+    // ─── BOOT ─────────────────────────────────────────────────────────────────
+    // Immediate data fetch + auto-refresh every 30 seconds
     fetchData();
-    setInterval(fetchData, 15000);
+    setInterval(fetchData, 30000);
   </script>
 </body>
 </html>

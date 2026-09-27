@@ -236,15 +236,22 @@ export function initializeDatabase(): void {
             plan          TEXT NOT NULL DEFAULT 'free' CHECK (plan IN ('free', 'starter', 'pro', 'team')),
             monthly_quota INTEGER NOT NULL DEFAULT 1000,
             status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
-            created_at    TEXT NOT NULL
+            created_at    TEXT NOT NULL,
+            email         TEXT,
+            notes         TEXT
         )
     `);
+
+    // Live migration: add email/notes columns if upgrading from older schema
+    try { db.exec("ALTER TABLE tenants ADD COLUMN email TEXT"); } catch { /* column already exists */ }
+    try { db.exec("ALTER TABLE tenants ADD COLUMN notes TEXT"); } catch { /* column already exists */ }
 
     // Seed default-tenant if not existing
     db.exec(`
         INSERT OR IGNORE INTO tenants (tenant_id, name, plan, monthly_quota, status, created_at)
         VALUES ('default-tenant', 'Default Tenant', 'pro', 500000, 'active', '${new Date().toISOString()}')
     `);
+
 
     // -----------------------------------------------------------------------
     // Table: api_keys
@@ -289,6 +296,24 @@ export function initializeDatabase(): void {
 
     db.exec(`
         CREATE INDEX IF NOT EXISTS idx_webhooks_tenant ON webhooks(tenant_id)
+    `);
+
+    // -----------------------------------------------------------------------
+    // Table: admin_audit_logs
+    // -----------------------------------------------------------------------
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS admin_audit_logs (
+            id          TEXT PRIMARY KEY,
+            action      TEXT NOT NULL,
+            tenant_id   TEXT,
+            details     TEXT,
+            ip_address  TEXT,
+            created_at  TEXT NOT NULL
+        )
+    `);
+
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON admin_audit_logs(created_at DESC)
     `);
 }
 
