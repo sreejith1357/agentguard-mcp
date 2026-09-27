@@ -1,5 +1,5 @@
 # AgentGuard MCP v3.1.0 Multi-stage Production Dockerfile
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 
 WORKDIR /app
 
@@ -19,7 +19,7 @@ RUN npm run build
 RUN npm prune --production
 
 # Production runtime stage
-FROM node:20-slim AS runner
+FROM node:22-slim AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production

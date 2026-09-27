@@ -7,7 +7,7 @@
     "url": "https://github.com/your-org/agentguard-mcp.git"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "main": "index.js",
   "scripts": {
