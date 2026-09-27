@@ -1,0 +1,14 @@
+# Smithery.ai MCP Server Configuration
+# https://smithery.ai/docs/config
+
+mcpServer:
+  name: AgentGuard MCP
+  description: Active control plane and governance infrastructure for AI agents — prevents infinite loops, trips circuit breakers, and blocks prompt injections.
+  version: 3.1.0
+  command:
+    type: docker
+    config:
+      dockerfile: Dockerfile
+  env:
+    PORT: "3000"
+    NODE_ENV: "production"

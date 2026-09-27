@@ -1,0 +1,36 @@
+{
+  "name": "agentguard-mcp",
+  "title": "AgentGuard MCP Control Plane",
+  "version": "3.1.0",
+  "description": "Active control plane & governance infrastructure for AI agents — infinite loop prevention, circuit breakers, prompt injection protection, and multi-tenant observability.",
+  "vendor": "AgentGuard",
+  "homepage": "https://github.com/sreejith1357/agentguard-mcp",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sreejith1357/agentguard-mcp.git"
+  },
+  "license": "MIT",
+  "transports": ["http", "sse"],
+  "tools": [
+    {
+      "name": "log_checkpoint",
+      "description": "Record agent tool call checkpoint and evaluate trajectory for infinite loops, parameter repetitions, and runaway execution."
+    },
+    {
+      "name": "validate_tool_response",
+      "description": "Validate and sanitize tool output against schema expectations and check for prompt injection signatures."
+    },
+    {
+      "name": "detect_anomaly",
+      "description": "Run statistical Z-score and sliding window EMA anomaly detection on execution latency and response sizes."
+    },
+    {
+      "name": "circuit_breaker_check",
+      "description": "Query or evaluate target tool Circuit Breaker status (CLOSED, OPEN, HALF_OPEN) to prevent cascading failures."
+    },
+    {
+      "name": "get_session_history",
+      "description": "Retrieve full execution trajectory, checkpoints, and telemetry for an active agent session."
+    }
+  ]
+}

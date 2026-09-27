@@ -1,15 +1,42 @@
 {
   "name": "agentguard-mcp",
   "version": "3.1.0",
-  "description": "Production-grade reliability and observability infrastructure for AI agents.",
+  "description": "Production-grade reliability and security control plane for AI agents.",
+  "author": "Sreejith <sjith310@gmail.com>",
+  "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/agentguard-mcp.git"
+    "url": "https://github.com/sreejith1357/agentguard-mcp.git"
   },
+  "bugs": {
+    "url": "https://github.com/sreejith1357/agentguard-mcp/issues"
+  },
+  "homepage": "https://github.com/sreejith1357/agentguard-mcp#readme",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "security",
+    "circuit-breaker",
+    "governance",
+    "observability",
+    "admin-console"
+  ],
   "engines": {
     "node": ">=22"
   },
-  "main": "index.js",
+  "main": "dist/index.js",
+  "bin": {
+    "agentguard-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "public",
+    "README.md",
+    "smithery.yaml",
+    "glama.json",
+    "mcp.json"
+  ],
   "scripts": {
     "dev": "npx tsx src/index.ts",
     "build": "tsc",
