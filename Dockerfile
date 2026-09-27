@@ -3,6 +3,9 @@ FROM node:20-slim AS builder
 
 WORKDIR /app
 
+# Install build tools for native C++ addon compilation (better-sqlite3)
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
+
 # Copy package manifests and install dependencies
 COPY package*.json ./
 RUN npm ci
@@ -12,6 +15,9 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npm run build
 
+# Prune devDependencies to keep runtime image lightweight
+RUN npm prune --production
+
 # Production runtime stage
 FROM node:20-slim AS runner
 
@@ -19,13 +25,14 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# Install curl for healthcheck
+# Install runtime utilities (curl for healthcheck)
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 
+# Copy package manifests
 COPY package*.json ./
-RUN npm ci --only=production
 
-# Copy compiled JavaScript and static admin console assets
+# Copy compiled production node_modules and built artifacts from builder stage
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY public/ ./public/
 
