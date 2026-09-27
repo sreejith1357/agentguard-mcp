@@ -4,6 +4,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Copy package manifests
+RUN apk add --no-cache python3 make g++
 COPY package*.json ./
 RUN npm ci
 
@@ -20,13 +21,14 @@ ENV NODE_ENV=production
 ENV PORT=3000
 
 # Install build dependencies for better-sqlite3 native addon
-RUN apk add --no-req-packages python3 make g++
+RUN apk add --no-cache python3 make g++
 
 COPY package*.json ./
 RUN npm ci --only=production
 
-# Copy compiled JavaScript from builder stage
+# Copy compiled JavaScript and static admin console assets
 COPY --from=builder /app/dist ./dist
+COPY public/ ./public/
 
 # Create volume mount point for persistent SQLite database
 VOLUME ["/app/agentguard.db"]
