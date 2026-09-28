@@ -2,7 +2,7 @@
 
 <div align="center">
 
-# 🛡️ AgentGuard MCP (v3.1.0 Enterprise)
+# 🛡️ AgentGuard MCP (v3.1.1 Enterprise)
 
 **Active Control Plane & Governance Infrastructure for AI Agents built on the Model Context Protocol (MCP)**
 
@@ -12,7 +12,7 @@
 [![Docker Ready](https://img.shields.io/badge/Docker-Ready-2496ed.svg?style=flat-square)](Dockerfile)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
-[Features](#-key-features) • [Quick Start](#-quick-start) • [Admin Console](#-admin-console) • [MCP Tools](#-mcp-tool-reference) • [SDKs](#-python--node-sdks) • [Deployment](#-deployment)
+[Features](#-key-features) • [Architecture](#-architectural-design) • [Quick Start](#-quick-start) • [Admin Console](#-admin-console) • [MCP Tools](#-mcp-tool-reference) • [SDKs](#-python--node-sdks) • [Version History](#-version-evolution)
 
 ---
 
@@ -20,9 +20,9 @@
 
 ## 📌 Executive Summary
 
-Most AI agent platforms rely on **passive observability**—logging errors 10 minutes after an autonomous agent goes rogue, drains token budgets, or leaks sensitive data. 
+Most AI agent observability platforms operate purely **after the fact**—logging telemetry 10 minutes after an autonomous agent loops endlessly, burns API tokens, or processes corrupted tool outputs.
 
-**AgentGuard MCP** sits **directly inside the agent execution loop** as an active control plane. It intercepts tool calls in real-time to prevent catastrophic agent failures *before* they consume budgets or corrupt downstream infrastructure.
+**AgentGuard MCP** provides an **active control plane** for Model Context Protocol (MCP) agents. Through standard MCP tool protocol primitives and lightweight SDK client wrappers, agents and execution orchestrators pre-flight external tool health, validate response data schemas, track reasoning trajectories, and isolate cascading API failures in real time.
 
 ```
                   ┌────────────────────────────────────────────────────────┐
@@ -43,27 +43,59 @@ Most AI agent platforms rely on **passive observability**—logging errors 10 mi
 
 ---
 
-## ✨ Key Features
+## ✨ Key Features (Fully Implemented & Test-Verified)
 
 ### 🛡️ Active Execution Governance
-* **Infinite Loop Prevention**: Detects recursive tool calls and repeated parameter signatures before agents drain API budgets.
-* **Prompt Injection & Output Validation**: Sanitizes and validates tool response payloads against strict JSON schemas and injection patterns.
-* **Statistical Anomaly Detection**: Uses online Exponential Moving Average (EMA) and Z-score statistical analysis to flag latency drift or anomalous output sizes.
+* **Infinite Loop & Trajectory Checkpointing**: Real-time detection of duplicate parameter patterns and recursive execution loops (`log_checkpoint`).
+* **Schema & Output Sanitization**: Validates tool payload structures, data freshness, and checks for prompt injection signatures (`validate_tool_response`).
+* **Statistical Anomaly Detection**: Calculates Z-scores and sliding-window Exponential Moving Averages (EMA) to flag latency drift or anomalous output sizes (`detect_anomaly`).
 
-### ⚡ Automated Circuit Breaker Grid
-* **Failure Isolation**: Automatically trips circuits (`CLOSED` → `OPEN`) after 5 consecutive tool failures to protect downstream APIs.
-* **Canary Recovery**: Auto-transitions to `HALF_OPEN` after a 60-second cooldown to test target service recovery without risking agent uptime.
+### ⚡ Circuit Breaker Reliability Grid
+* **Automated Failure Isolation**: Automatically trips breakers from `CLOSED` to `OPEN` after 5 consecutive tool failures (`report_tool_result`, `get_circuit_state`).
+* **Canary Recovery Testing**: Transitions to `HALF_OPEN` after a 60-second cooldown window to safely test downstream endpoint recovery.
 
-### 🏢 Enterprise Multi-Tenancy & Security
-* **Tenant Isolation & Quota Enforcement**: Custom rate limits, monthly request quotas, and multi-tenant Bearer authentication.
-* **Hashed Key Storage**: API keys are securely hashed using SHA-256 in SQLite/PostgreSQL storage.
-* **Immutable Security Audit Trail**: Append-only security log tracking all administrative and tenant actions.
+### 🏢 Multi-Tenant Security & Storage Tier
+* **Hashed Token Authentication**: Supports tenant-scoped Bearer tokens with SHA-256 key hashing in database storage (`apiKeyStore.ts`).
+* **Dual Database Architecture**: Zero-config SQLite (WAL mode with 64MB mmap) + production PostgreSQL repository abstraction (`sqliteRepository.ts`, `postgresRepository.ts`).
+* **Security Audit Trail**: Append-only audit logger capturing administrative events, tenant updates, and IP addresses (`auditLogger.ts`).
 
-### 🖥️ Built-in Real-Time Admin Console
-* **Single-Page Dashboard**: Accessible via `/admin` with live metrics, customer subscription management, API key generation, circuit resets, and webhook subscriptions.
+### 🖥️ Admin Console & Webhook Dispatcher
+* **Live Administration Web UI**: Standalone browser application available at `/admin` for real-time tenant subscription management, key generation, circuit resets, and audit log inspection.
+* **Webhook Alerting**: Asynchronous event dispatcher firing HTTP POST alerts (`circuit.tripped`, `anomaly.detected`, `quota.warning`) to external monitoring endpoints.
 
-### 🔔 Real-Time Webhook Dispatcher
-* **Event Push**: Delivers real-time HTTP POST alerts (`circuit.tripped`, `anomaly.detected`, `quota.warning`) directly to Slack, Discord, or custom backend webhooks.
+---
+
+## 🛠️ Complete MCP Tool Reference (12 Registered Tools)
+
+AgentGuard exposes **12 purpose-built MCP tools** divided into four operational modules:
+
+### 1. Core Governance & Security Module
+| Tool | Description | Key Inputs |
+| :--- | :--- | :--- |
+| `health_check` | Proactively tests HTTP/HTTPS target health and response latency before tool invocation. | `url`, `expected_status`, `timeout_ms` |
+| `validate_tool_response` | Inspects tool output data for schema types, required fields, freshness, and prompt injection signatures. | `data`, `schema`, `required_fields`, `max_age_seconds` |
+| `log_checkpoint` | Records agent reasoning step and checks trajectory history for infinite loops. | `session_id`, `checkpoint_type`, `content`, `tags` |
+| `detect_anomaly` | Evaluates observed metrics against baseline statistics using Z-score outlier detection. | `value`, `baseline`, `metric_name`, `sensitivity` |
+| `get_session_history` | Retrieves full persistent session trajectory with type, timestamp, and tag filters. | `session_id`, `limit`, `checkpoint_type`, `tags` |
+
+### 2. Circuit Breaker Grid Module
+| Tool | Description | Key Inputs |
+| :--- | :--- | :--- |
+| `report_tool_result` | Reports tool call success or failure to update circuit failure counters. | `tool_name`, `success`, `error_message` |
+| `get_circuit_state` | Queries current pre-flight breaker state (`CLOSED`, `OPEN`, `HALF_OPEN`). | `tool_name` |
+| `reset_circuit` | Manually resets an `OPEN` or `HALF_OPEN` circuit back to `CLOSED`. | `tool_name`, `reason` |
+
+### 3. Causal Chain Analysis Module
+| Tool | Description | Key Inputs |
+| :--- | :--- | :--- |
+| `analyze_causality` | Performs Breadth-First Search (BFS) over parent checkpoint IDs to locate root-cause failure steps. | `session_id`, `failed_checkpoint_ids` |
+
+### 4. Adaptive Baseline Learning Module
+| Tool | Description | Key Inputs |
+| :--- | :--- | :--- |
+| `record_observation` | Feeds numeric metric samples into the online Exponential Moving Average (EMA) engine. | `metric_name`, `value` |
+| `get_learned_baseline` | Fetches computed statistical mean, standard deviation, and sample count baselines. | `metric_name`, `include_recent_observations` |
+| `reset_baseline` | Resets or soft-deletes learned statistical baselines for a target metric. | `metric_name`, `hard_delete` |
 
 ---
 
@@ -71,38 +103,18 @@ Most AI agent platforms rely on **passive observability**—logging errors 10 mi
 
 ### 1. Run the MCP Server
 
-#### Option A: Run via `npx` (No installation needed)
 ```bash
+# Option A: Run directly via npx
 npx agentguard-mcp-server
-```
 
-#### Option B: Run via Docker Container
-```bash
+# Option B: Run via Docker Container
 docker run -p 3000:3000 \
   -e AGENTGUARD_ADMIN_KEY=$(openssl rand -hex 32) \
   -e AGENTGUARD_API_KEY=$(openssl rand -hex 32) \
   sreejith1357/agentguard-mcp
 ```
 
-#### Option C: Local Repository Setup
-```bash
-git clone https://github.com/sreejith1357/agentguard-mcp.git
-cd agentguard-mcp
-npm install
-npm run build
-npm start
-```
-* MCP Service Endpoint: `http://localhost:3000/mcp`
-* Admin Console UI: `http://localhost:3000/admin`
-* Health Check Endpoint: `http://localhost:3000/health`
-
----
-
-## 🔌 MCP Client Configuration
-
-### Claude Desktop Integration
-
-Add AgentGuard to your `claude_desktop_config.json`:
+### 2. Configure Claude Desktop (`claude_desktop_config.json`)
 
 ```json
 {
@@ -119,76 +131,16 @@ Add AgentGuard to your `claude_desktop_config.json`:
 }
 ```
 
-Or connect via HTTP / Server-Sent Events (SSE):
-
-```json
-{
-  "mcpServers": {
-    "agentguard": {
-      "type": "http",
-      "url": "http://localhost:3000/mcp",
-      "headers": {
-        "Authorization": "Bearer your-agentguard-api-key"
-      }
-    }
-  }
-}
-```
-
----
-
-## 🖥️ Admin Console (`/admin`)
-
-AgentGuard includes a built-in enterprise administration web interface. Open `http://localhost:3000/admin` in your web browser:
-
-```
-┌───────────────────────────────────────────────────────────────────────────────┐
-│ AgentGuard MCP Admin Console                                [🔒 Lock Session] │
-├───────────────────────────────────────────────────────────────────────────────┤
-│ TOTAL CALLS: 142,500   REGISTERED TENANTS: 12   CIRCUITS: 8   AVG LATENCY: <5ms │
-├───────────────────────────────────────────────────────────────────────────────┤
-│ [📊 Analytics] [🏢 Tenants] [🔑 API Keys] [⚡ Circuits] [🔔 Webhooks] [🛡️ Audit] │
-│                                                                               │
-│  🏢 Registered Tenants & Quotas                                               │
-│  • Acme Corp        (PRO Plan)     [ 34% Quota Used ]    [ Active ]  [ Actions ]│
-│  • Globex Devs      (STARTER Plan) [ 92% Quota Used ]    [ Active ]  [ Actions ]│
-└───────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Dashboard Capabilities:
-* 📊 **Usage Analytics**: Real-time tool invocation frequencies and trajectory statistics.
-* 🏢 **Tenants & Subscriptions**: Create tenant slugs, assign billing tiers (`Free`, `Starter`, `Pro`, `Team`), set internal notes, and suspend/reactivate client accounts.
-* 🔑 **API Key Management**: Generate live Bearer tokens (`ag_live_...`) with instant copy helpers and key revocation.
-* ⚡ **Circuit Breaker Control Grid**: View active circuit states (`CLOSED`, `OPEN`, `HALF_OPEN`) and force manual breaker resets.
-* 🔔 **Webhook Subscriptions**: Subscribe URLs to security events (`circuit.tripped`, `anomaly.detected`, `quota.warning`).
-* 🛡️ **Security Audit Trail**: Inspect filterable audit logs (timestamps, admin actions, target tenant IDs, IP addresses).
-
----
-
-## 🛠️ MCP Tool Reference
-
-AgentGuard exposes five core MCP tools to AI agents:
-
-| Tool Name | Purpose | Key Parameters |
-| :--- | :--- | :--- |
-| `log_checkpoint` | Records agent reasoning step & detects infinite loops | `session_id`, `checkpoint_type`, `content`, `tags` |
-| `validate_tool_response` | Validates data payloads & blocks prompt injections | `data`, `schema`, `required_fields`, `max_age_seconds` |
-| `detect_anomaly` | Statistical Z-score & EMA latency drift detection | `value`, `baseline`, `metric_name`, `sensitivity` |
-| `circuit_breaker_check` | Checks tool health state (`CLOSED`, `OPEN`, `HALF_OPEN`) | `tool_name`, `failure_threshold`, `cooldown_seconds` |
-| `get_session_history` | Retrieves persistent agent session memory & trajectory | `session_id`, `limit`, `checkpoint_type`, `tags` |
-
 ---
 
 ## 🐍 Python & Node SDKs
 
 ### Python SDK (`agentguard-mcp-sdk`)
 
-Install from PyPI:
 ```bash
 pip install agentguard-mcp-sdk
 ```
 
-Usage in Python agent code:
 ```python
 from agentguard import AgentGuardClient
 
@@ -197,91 +149,59 @@ client = AgentGuardClient(
     api_key="ag_live_your_api_key_here"
 )
 
-# 1. Check Circuit Breaker status before executing an external tool
+# 1. Pre-flight Circuit Check
 circuit = client.check_circuit("weather_api")
 if circuit.get("state") == "OPEN":
-    print("⚡ Circuit Breaker is OPEN! Triggering fallback mode.")
+    print("⚡ Circuit is OPEN! Activating fallback strategy.")
 
-# 2. Log reasoning checkpoint & check for loops
+# 2. Checkpoint Trajectory
 checkpoint = client.log_checkpoint(
-    session_id="sess_88291",
-    step_index=3,
+    session_id="sess_1029",
+    step_index=1,
     tool_name="web_search",
-    tool_input={"query": "agentic security"}
+    tool_input={"query": "mcp security"}
 )
 
 if checkpoint.get("loop_detected"):
-    print(f"⚠️ Loop detected! Action: {checkpoint.get('recommended_action')}")
-```
-
-### Node.js / HTTP Integration
-
-```javascript
-const response = await fetch("http://localhost:3000/mcp", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "Authorization": "Bearer ag_live_your_api_key_here"
-  },
-  body: JSON.stringify({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "tools/call",
-    params: {
-      name: "health_check",
-      arguments: { url: "https://api.github.com" }
-    }
-  })
-});
+    print("⚠️ Loop detected! Halting execution.")
 ```
 
 ---
 
-## ☁️ Deployment
+## 🖥️ Admin Web Console (`/admin`)
 
-### Environment Variables
+Access the built-in management UI at `http://localhost:3000/admin`:
 
-| Variable | Default | Purpose |
+* **Analytics**: Real-time tool call distribution and execution volume.
+* **Tenant Governance**: Manage customer slugs, subscription plans (`Free`, `Starter`, `Pro`, `Team`), monthly quotas, and account suspensions.
+* **API Keys**: Generate live Bearer tokens (`ag_live_...`) with instant copy helpers and key revocation.
+* **Circuit Grid**: Live monitor for tool circuit statuses with manual override reset buttons.
+* **Webhooks**: Configure real-time HTTP POST notification endpoints.
+* **Audit Trail**: Filterable security audit logs capturing administrative actions and request IP addresses.
+
+---
+
+## 📜 Version Evolution
+
+| Version | Architectural Focus | Key Additions |
 | :--- | :--- | :--- |
-| `PORT` | `3000` | Server HTTP port |
-| `NODE_ENV` | `production` | Environment mode (`production` / `development`) |
-| `AGENTGUARD_ADMIN_KEY` | *(Generated)* | Master 64-char hex key protecting `/admin` UI |
-| `AGENTGUARD_API_KEY` | *(Generated)* | Global fallback API authentication token |
-| `RATE_LIMIT_MAX` | `500` | Max API requests per 15-minute window per IP |
-| `CORS_ORIGIN` | `*` | Allowed CORS origins for browser/web clients |
-
-### Cloud Deployment (Render, AWS, DigitalOcean, Railway)
-
-Deploying via Docker is fully supported:
-
-```bash
-docker run -p 3000:3000 \
-  -e NODE_ENV=production \
-  -e AGENTGUARD_ADMIN_KEY=your_64_char_admin_key \
-  -e AGENTGUARD_API_KEY=your_64_char_api_key \
-  -e RATE_LIMIT_MAX=500 \
-  -v agentguard_data:/app/data \
-  sreejith1357/agentguard-mcp
-```
-
-*(For Render deployments, connect your repository and select the provided `Dockerfile` — environment variables set in the Render Dashboard will be loaded automatically).*
+| **v1.0.0** | Core MCP Safety Tools | `health_check`, `validate_tool_response`, `log_checkpoint`, `detect_anomaly`, `get_session_history`. |
+| **v2.0.0 / v2.1.0** | Dynamic Reliability Engine | SQLite persistence, Circuit Breakers (`report_tool_result`, `get_circuit_state`), Causal BFS Analysis, and EMA Adaptive Baselines. |
+| **v3.0.0 / v3.1.1** | Enterprise SaaS Control Plane | SQLite WAL + PostgreSQL dual repository architecture, Standalone Admin Console (`/admin`), SHA-256 API Key hashing, Webhook Dispatcher, and Security Audit Logger. |
 
 ---
 
-## 🌐 Registries & Standards Compliance
-
-AgentGuard MCP is published and listed across standard ecosystem registries:
+## 🌐 Ecosystem Registries
 
 * 📦 **NPM Registry**: [`agentguard-mcp-server`](https://www.npmjs.com/package/agentguard-mcp-server)
 * 🐍 **PyPI Registry**: [`agentguard-mcp-sdk`](https://pypi.org/project/agentguard-mcp-sdk/)
-* 🛠️ **Smithery.ai**: Configured via [`smithery.yaml`](smithery.yaml)
-* 🦙 **Glama.ai**: Configured via [`glama.json`](glama.json)
-* 🌐 **MCP.so / Mcpize**: Manifest [`mcp.json`](mcp.json)
+* 📋 **Official MCP Standard Metadata**: [`server.json`](server.json)
+* 🛠️ **Smithery.ai**: [`smithery.yaml`](smithery.yaml)
+* 🦙 **Glama.ai**: [`glama.json`](glama.json)
+* 🌐 **MCP.so / Mcpize**: [`mcp.json`](mcp.json)
 
 ---
 
 ## 📜 License & Author
 
-Distributed under the **MIT License**.
-
-Created and maintained by **Sreejith** ([@sreejith1357](https://github.com/sreejith1357)).
+Distributed under the **MIT License**. Created by **Sreejith** ([@sreejith1357](https://github.com/sreejith1357)).

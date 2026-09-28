@@ -1,7 +1,7 @@
 {
-  "name": "agentguard-mcp",
+  "name": "agentguard-mcp-server",
   "title": "AgentGuard MCP Control Plane",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "Active control plane & governance infrastructure for AI agents — infinite loop prevention, circuit breakers, prompt injection protection, and multi-tenant observability.",
   "vendor": "AgentGuard",
   "homepage": "https://github.com/sreejith1357/agentguard-mcp",
@@ -10,30 +10,55 @@
     "url": "https://github.com/sreejith1357/agentguard-mcp.git"
   },
   "license": "MIT",
-  "transports": [
-    "http",
-    "sse"
-  ],
+  "transports": ["http", "sse", "stdio"],
   "tools": [
     {
-      "name": "log_checkpoint",
-      "description": "Record agent tool call checkpoint and evaluate trajectory for infinite loops, parameter repetitions, and runaway execution."
+      "name": "health_check",
+      "description": "Proactively probe target endpoint or MCP server health and latency before agent invocation."
     },
     {
       "name": "validate_tool_response",
       "description": "Validate and sanitize tool output against schema expectations and check for prompt injection signatures."
     },
     {
+      "name": "log_checkpoint",
+      "description": "Record agent reasoning checkpoint and evaluate execution trajectory for infinite loops and parameter repetitions."
+    },
+    {
       "name": "detect_anomaly",
       "description": "Run statistical Z-score and sliding window EMA anomaly detection on execution latency and response sizes."
     },
     {
-      "name": "circuit_breaker_check",
-      "description": "Query or evaluate target tool Circuit Breaker status (CLOSED, OPEN, HALF_OPEN) to prevent cascading failures."
+      "name": "get_session_history",
+      "description": "Retrieve full execution trajectory, reasoning checkpoints, and telemetry for an active agent session."
     },
     {
-      "name": "get_session_history",
-      "description": "Retrieve full execution trajectory, checkpoints, and telemetry for an active agent session."
+      "name": "report_tool_result",
+      "description": "Report tool call success or error outcome to drive target tool Circuit Breakers."
+    },
+    {
+      "name": "get_circuit_state",
+      "description": "Query pre-flight health status (CLOSED, OPEN, HALF_OPEN) for a target tool circuit breaker."
+    },
+    {
+      "name": "reset_circuit",
+      "description": "Manually force reset an OPEN or HALF_OPEN circuit breaker back to CLOSED state."
+    },
+    {
+      "name": "analyze_causality",
+      "description": "Perform BFS tree analysis across parent checkpoint IDs to isolate root-cause failure steps."
+    },
+    {
+      "name": "record_observation",
+      "description": "Feed numeric observation into online Exponential Moving Average (EMA) baseline learning system."
+    },
+    {
+      "name": "get_learned_baseline",
+      "description": "Retrieve online learned metric mean, standard deviation, and sample count baselines."
+    },
+    {
+      "name": "reset_baseline",
+      "description": "Reset learned statistical baseline metrics for a specific metric."
     }
   ]
 }

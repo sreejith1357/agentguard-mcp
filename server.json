@@ -1,0 +1,37 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/server.json",
+  "name": "agentguard-mcp-server",
+  "title": "AgentGuard MCP Control Plane",
+  "description": "Production-grade reliability and security control plane for AI agents — active execution governance, circuit breakers, adaptive anomaly detection, and multi-tenant observability.",
+  "version": "3.1.1",
+  "vendor": "AgentGuard",
+  "homepage": "https://github.com/sreejith1357/agentguard-mcp",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sreejith1357/agentguard-mcp.git"
+  },
+  "license": "MIT",
+  "packages": [
+    {
+      "registry": "npm",
+      "name": "agentguard-mcp-server",
+      "version": "3.1.1"
+    },
+    {
+      "registry": "pypi",
+      "name": "agentguard-mcp-sdk",
+      "version": "3.1.1"
+    }
+  ],
+  "transports": [
+    {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "agentguard-mcp-server"]
+    },
+    {
+      "type": "streamable-http",
+      "endpoint": "/mcp"
+    }
+  ]
+}
