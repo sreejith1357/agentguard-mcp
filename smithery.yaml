@@ -4,7 +4,7 @@
 mcpServer:
   name: AgentGuard MCP
   description: Active control plane and governance infrastructure for AI agents — prevents infinite loops, trips circuit breakers, and blocks prompt injections.
-  version: 3.1.1
+  version: 3.1.2
   command:
     type: docker
     config:

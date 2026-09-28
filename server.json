@@ -3,7 +3,7 @@
   "name": "agentguard-mcp-server",
   "title": "AgentGuard MCP Control Plane",
   "description": "Production-grade reliability and security control plane for AI agents — active execution governance, circuit breakers, adaptive anomaly detection, and multi-tenant observability.",
-  "version": "3.1.1",
+  "version": "3.1.2",
   "vendor": "AgentGuard",
   "homepage": "https://github.com/sreejith1357/agentguard-mcp",
   "repository": {
@@ -15,12 +15,12 @@
     {
       "registry": "npm",
       "name": "agentguard-mcp-server",
-      "version": "3.1.1"
+      "version": "3.1.2"
     },
     {
       "registry": "pypi",
       "name": "agentguard-mcp-sdk",
-      "version": "3.1.1"
+      "version": "3.1.2"
     }
   ],
   "transports": [

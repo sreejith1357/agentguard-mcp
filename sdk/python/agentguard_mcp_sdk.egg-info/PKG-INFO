@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: agentguard-mcp-sdk
-Version: 3.1.1
+Version: 3.1.2
 Summary: Official Python Client SDK for AgentGuard MCP — Agent Reliability & Security Infrastructure
 Author-email: Sreejith <sjith310@gmail.com>
 License-Expression: MIT

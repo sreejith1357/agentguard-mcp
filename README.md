@@ -2,7 +2,7 @@
 
 <div align="center">
 
-# 🛡️ AgentGuard MCP (v3.1.1 Enterprise)
+# 🛡️ AgentGuard MCP (v3.1.2 Enterprise)
 
 **Active Control Plane & Governance Infrastructure for AI Agents built on the Model Context Protocol (MCP)**
 
@@ -187,7 +187,7 @@ Access the built-in management UI at `http://localhost:3000/admin`:
 | :--- | :--- | :--- |
 | **v1.0.0** | Core MCP Safety Tools | `health_check`, `validate_tool_response`, `log_checkpoint`, `detect_anomaly`, `get_session_history`. |
 | **v2.0.0 / v2.1.0** | Dynamic Reliability Engine | SQLite persistence, Circuit Breakers (`report_tool_result`, `get_circuit_state`), Causal BFS Analysis, and EMA Adaptive Baselines. |
-| **v3.0.0 / v3.1.1** | Enterprise SaaS Control Plane | SQLite WAL + PostgreSQL dual repository architecture, Standalone Admin Console (`/admin`), SHA-256 API Key hashing, Webhook Dispatcher, and Security Audit Logger. |
+| **v3.0.0 / v3.1.2** | Enterprise SaaS Control Plane | SQLite WAL + PostgreSQL dual repository architecture, Standalone Admin Console (`/admin`), SHA-256 API Key hashing, Webhook Dispatcher, and Security Audit Logger. |
 
 ---
 
