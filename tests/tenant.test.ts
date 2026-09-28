@@ -37,7 +37,7 @@ describe("Multi-Tenant Token Scoping & Data Isolation", () => {
                 tenant_id: "tenant-alpha",
                 project_id: "proj-x",
                 env: "production",
-                rate_limit: 100,
+                rate_limit: 10000,
             });
         });
 
