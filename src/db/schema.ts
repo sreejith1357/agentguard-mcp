@@ -13,13 +13,24 @@
 
 import Database from "better-sqlite3";
 import path from "path";
+import fs from "fs";
 
 // ---------------------------------------------------------------------------
-// Database path — resolves to <project-root>/agentguard.db
+// Database path resolution — resolves to AGENTGUARD_DB_PATH, DB_PATH, or <project-root>/agentguard.db
 // CJS __dirname = dist/db/ or src/db/ depending on dev vs prod
 // ---------------------------------------------------------------------------
 
-const DB_PATH = path.resolve(__dirname, "..", "..", "agentguard.db");
+const rawDbPath = process.env.AGENTGUARD_DB_PATH || process.env.DB_PATH || path.resolve(__dirname, "..", "..", "agentguard.db");
+
+let DB_PATH = rawDbPath;
+if (fs.existsSync(rawDbPath) && fs.statSync(rawDbPath).isDirectory()) {
+    DB_PATH = path.join(rawDbPath, "agentguard.sqlite");
+}
+
+const dbDir = path.dirname(DB_PATH);
+if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+}
 
 // ---------------------------------------------------------------------------
 // Open database

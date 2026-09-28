@@ -36,8 +36,9 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY public/ ./public/
 
-# Create volume mount point for persistent SQLite database
-VOLUME ["/app/agentguard.db"]
+# Create directory volume mount point for persistent SQLite database
+ENV DB_PATH=/data/agentguard.db
+VOLUME ["/data"]
 
 EXPOSE 3000
 
