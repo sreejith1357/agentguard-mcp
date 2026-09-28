@@ -3,7 +3,7 @@
   "name": "agentguard-mcp",
   "title": "AgentGuard MCP Server",
   "description": "Production-grade reliability and security control plane for AI agents.",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "vendor": "AgentGuard",
   "homepage": "https://github.com/sreejith1357/agentguard-mcp",
   "repository": "https://github.com/sreejith1357/agentguard-mcp",

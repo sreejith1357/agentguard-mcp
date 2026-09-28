@@ -10,7 +10,10 @@
     "url": "https://github.com/sreejith1357/agentguard-mcp.git"
   },
   "license": "MIT",
-  "transports": ["http", "sse"],
+  "transports": [
+    "http",
+    "sse"
+  ],
   "tools": [
     {
       "name": "log_checkpoint",
