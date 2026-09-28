@@ -5,7 +5,7 @@ Official Python client SDK for **AgentGuard MCP** — active control plane, gove
 ## Installation
 
 ```bash
-pip install agentguard
+pip install agentguard-mcp-sdk
 ```
 
 ## Quickstart
