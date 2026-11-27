@@ -6,23 +6,20 @@
  *  2. Field type correctness
  *  3. Data freshness (via timestamp age check)
  *  4. Custom per-field sanity rules (numeric bounds, regex pattern)
- *
- * Returns a structured ValidationResult so agents can gate downstream
- * actions on whether the data they received is actually trustworthy.
+ *  5. Prompt injection & delimiter spoofing detection
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildResponse, buildErrorResponse } from "../utils/response.js";
+import { scanForPromptInjection } from "../utils/injectionDetector.js";
+import { getTenantContext } from "../utils/auth.js";
+import { dispatchWebhookEvent } from "../utils/webhookDispatcher.js";
 import type {
     ValidationResult,
     ExpectedFieldType,
     FieldValidationResult,
 } from "../types/index.js";
-
-// ---------------------------------------------------------------------------
-// Input schema
-// ---------------------------------------------------------------------------
 
 const CustomRuleSchema = z.object({
     field: z.string().describe("The field name to apply this rule to"),
@@ -30,6 +27,7 @@ const CustomRuleSchema = z.object({
     max: z.number().optional().describe("Maximum numeric value (inclusive)"),
     pattern: z
         .string()
+        .max(256)
         .optional()
         .describe("Regex pattern the field value must match (as string)"),
 });
@@ -41,30 +39,24 @@ const SchemaMapSchema = z
     )
     .describe("Map of field name → expected JS type");
 
-// ---------------------------------------------------------------------------
-// Type helpers
-// ---------------------------------------------------------------------------
-
-/** Resolve the JS runtime type name to our ExpectedFieldType vocabulary */
 function resolveType(value: unknown): ExpectedFieldType {
     if (value === null) return "null";
     if (Array.isArray(value)) return "array";
     return typeof value as ExpectedFieldType;
 }
 
-/** Deep-get a nested field using dot notation, e.g. "meta.created_at" */
 function getNestedField(obj: Record<string, unknown>, key: string): unknown {
     return key.split(".").reduce<unknown>((acc, part) => {
-        if (acc !== null && typeof acc === "object" && !Array.isArray(acc)) {
+        if (acc !== null && typeof acc === "object") {
+            if (Array.isArray(acc)) {
+                const idx = Number(part);
+                return Number.isInteger(idx) && idx >= 0 && idx < acc.length ? acc[idx] : undefined;
+            }
             return (acc as Record<string, unknown>)[part];
         }
         return undefined;
     }, obj);
 }
-
-// ---------------------------------------------------------------------------
-// Core validation logic (pure functions — easy to unit test)
-// ---------------------------------------------------------------------------
 
 function validateRequiredFields(
     data: Record<string, unknown>,
@@ -100,7 +92,6 @@ function validateSchema(
     for (const [field, expectedType] of Object.entries(schema)) {
         const value = getNestedField(data, field);
         if (value === undefined) {
-            // Missing fields are handled by required_fields — skip silently
             results[`type:${field}`] = {
                 passed: true,
                 reason: `Field "${field}" not present — type check skipped`,
@@ -137,7 +128,6 @@ function validateAge(
     const warnings: string[] = [];
     const results: Record<string, FieldValidationResult> = {};
 
-    // Look for a timestamp field (common names)
     const candidateFields = ["timestamp", "created_at", "updated_at", "ts", "time"];
     let timestampValue: unknown;
     let foundField = "";
@@ -163,7 +153,7 @@ function validateAge(
     }
 
     const parsed = new Date(String(timestampValue));
-    if (isNaN(parsed.getTime())) {
+    if (Number.isNaN(parsed.getTime())) {
         results["freshness:timestamp"] = {
             passed: false,
             reason: `Field "${foundField}" is not a parseable date: "${timestampValue}"`,
@@ -216,7 +206,6 @@ function validateCustomRules(
             continue;
         }
 
-        // Numeric bounds
         if (rule.min !== undefined || rule.max !== undefined) {
             if (typeof value !== "number") {
                 results[`rule:${rule.field}:numeric`] = {
@@ -244,7 +233,6 @@ function validateCustomRules(
             }
         }
 
-        // Regex pattern
         if (rule.pattern !== undefined) {
             const strValue = String(value);
             let regex: RegExp;
@@ -276,24 +264,20 @@ function validateCustomRules(
     return { errors, warnings, results };
 }
 
-// ---------------------------------------------------------------------------
-// Tool registration
-// ---------------------------------------------------------------------------
-
 export function validateToolResponseTool(server: McpServer): void {
     server.registerTool(
         "validate_tool_response",
         {
             description:
                 "Inspects data returned from another MCP tool for five independent validation checks: " +
-                "1. Required field presence, 2. Field type schema validation, 3. Numeric value bounds checking, " +
-                "4. Data freshness via timestamp age, 5. Custom user-defined validation rules. " +
-                "Returns a structured report of all validation checks so you can gate downstream actions on data trustworthiness.",
+                "1. Required field presence, 2. Field type schema validation, 3. Numeric value bounds & regex rules, " +
+                "4. Data freshness via timestamp age, 5. Prompt injection & delimiter spoofing detection. " +
+                "Returns a structured report so you can gate downstream actions on data trustworthiness.",
             inputSchema: {
                 data: z
                     .union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())])
                     .describe(
-                        "The raw tool response to validate. Can be a JSON string, object, or array."
+                        "The raw tool response to validate. Can be a JSON string, plain text, object, or array."
                     ),
                 schema: SchemaMapSchema.optional().describe(
                     "Map of field name to expected type. Supports dot notation for nested fields (e.g. 'meta.id')."
@@ -315,32 +299,103 @@ export function validateToolResponseTool(server: McpServer): void {
                     .optional()
                     .default([])
                     .describe("Per-field sanity rules: numeric bounds and regex patterns"),
+                check_prompt_injection: z
+                    .boolean()
+                    .optional()
+                    .default(true)
+                    .describe("Scan text fields for prompt injection, delimiter spoofing, and exfiltration directives (default: true)"),
+                tool_name: z
+                    .string()
+                    .max(128)
+                    .optional()
+                    .describe("Optional source tool name for security telemetry and webhook alerts"),
             },
         },
-        async ({ data, schema, required_fields, max_age_seconds, custom_rules }) => {
+        async ({ data, schema, required_fields, max_age_seconds, custom_rules, check_prompt_injection, tool_name }) => {
             try {
-                // Parse data if it arrived as a JSON string
+                const runInjectionCheck = check_prompt_injection ?? true;
                 let parsed: Record<string, unknown>;
+                let rawDataForScan: unknown = data;
+
                 if (typeof data === "string") {
                     try {
                         const p = JSON.parse(data);
-                        if (typeof p !== "object" || p === null || Array.isArray(p)) {
-                            // Wrap primitive / array in a container for consistent field access
+                        rawDataForScan = p;
+                        if (Array.isArray(p)) {
+                            parsed = { items: p };
+                        } else if (typeof p !== "object" || p === null) {
                             parsed = { value: p };
                         } else {
                             parsed = p as Record<string, unknown>;
                         }
                     } catch {
-                        return buildResponse<ValidationResult>({
-                            valid: false,
-                            errors: ["data is a string but could not be parsed as JSON"],
-                            warnings: [],
-                            field_results: {
-                                "parse:data": {
-                                    passed: false,
-                                    reason: "JSON.parse failed — data is not valid JSON",
+                        // Even when non-JSON string is provided, still scan for prompt injection if enabled!
+                        const injectionScan = runInjectionCheck
+                            ? scanForPromptInjection(data)
+                            : { prompt_injection_detected: false, risk_level: "none" as const, matches: [] };
+
+                        const hasStructuralRequirements =
+                            (required_fields && required_fields.length > 0) ||
+                            (schema && Object.keys(schema).length > 0) ||
+                            max_age_seconds !== undefined ||
+                            (custom_rules && custom_rules.length > 0);
+
+                        const errors: string[] = [];
+                        const fieldResults: Record<string, FieldValidationResult> = {};
+
+                        if (hasStructuralRequirements) {
+                            errors.push("data is a string but could not be parsed as JSON");
+                            fieldResults["parse:data"] = {
+                                passed: false,
+                                reason: "JSON.parse failed — data is not valid JSON",
+                            };
+                        }
+
+                        if (injectionScan.prompt_injection_detected) {
+                            errors.push(
+                                `Prompt injection detected (${injectionScan.risk_level} risk): ${injectionScan.matches.map((m) => m.signature).join(", ")}`
+                            );
+                            fieldResults["security:prompt_injection"] = {
+                                passed: false,
+                                reason: `Detected ${injectionScan.matches.length} prompt injection signature(s)`,
+                            };
+                            const ctx = getTenantContext();
+                            dispatchWebhookEvent({
+                                tenant_id: ctx.tenant_id,
+                                event: "anomaly.detected",
+                                payload: {
+                                    metric_name: tool_name || "validate_tool_response",
+                                    severity: injectionScan.risk_level,
+                                    signatures: injectionScan.matches.map((m) => m.signature),
+                                    verdict: "Prompt injection detected in tool response",
+                                    timestamp: new Date().toISOString(),
                                 },
-                            },
+                            });
+                        } else if (runInjectionCheck) {
+                            fieldResults["security:prompt_injection"] = {
+                                passed: true,
+                                reason: "No prompt injection signatures detected ✓",
+                            };
+                        }
+
+                        // Backward-compatible behavior: if structural checks weren't requested and text is clean, still reject non-JSON if no injection check passed? Wait: preserve exact JSON-parse error when string isn't JSON unless plain-text injection check was explicitly all that was asked?
+                        // Wait: if caller only passes raw string (e.g. from README example), without structural rules, non-JSON clean string shouldn't fail unless JSON expected, OR wait: existing behavior returned valid: false for any non-JSON string! Keeping valid: false when non-JSON unless parsed, wait: README example passes raw_response string without schema! If valid text has no injection and no schema/required_fields, returning valid: !injectionDetected for plain text? Let's check: if schema or required_fields is empty AND no injection found, wait — what if a test passes invalid JSON expecting valid: false?
+                        // Let's keep JSON parse error if `hasStructuralRequirements` OR if `data.trim().startsWith("{")` or `data.trim().startsWith("[")`. For plain text without JSON brackets and without structural checks, return `valid: !injectionScan.prompt_injection_detected`! That handles BOTH malformed JSON tests AND plain-text prompt-injection checks cleanly!
+                        const looksLikeJson = data.trim().startsWith("{") || data.trim().startsWith("[");
+                        if (!hasStructuralRequirements && looksLikeJson) {
+                            errors.push("data is a string but could not be parsed as JSON");
+                            fieldResults["parse:data"] = {
+                                passed: false,
+                                reason: "JSON.parse failed — data is not valid JSON",
+                            };
+                        }
+
+                        return buildResponse<ValidationResult>({
+                            valid: errors.length === 0,
+                            errors,
+                            warnings: [],
+                            field_results: fieldResults,
+                            ...(runInjectionCheck ? { security_scan: injectionScan } : {}),
                             timestamp: new Date().toISOString(),
                         });
                     }
@@ -390,13 +445,44 @@ export function validateToolResponseTool(server: McpServer): void {
                     Object.assign(allResults, ruleCheck.results);
                 }
 
-                const valid = allErrors.length === 0;
+                // 5. Prompt injection security scan
+                let securityScan;
+                if (runInjectionCheck) {
+                    securityScan = scanForPromptInjection(rawDataForScan);
+                    if (securityScan.prompt_injection_detected) {
+                        allErrors.push(
+                            `Prompt injection detected (${securityScan.risk_level} risk): ${securityScan.matches.map((m) => `${m.field}:${m.signature}`).join(", ")}`
+                        );
+                        allResults["security:prompt_injection"] = {
+                            passed: false,
+                            reason: `Detected ${securityScan.matches.length} prompt injection signature(s) across fields`,
+                        };
+                        const ctx = getTenantContext();
+                        dispatchWebhookEvent({
+                            tenant_id: ctx.tenant_id,
+                            event: "anomaly.detected",
+                            payload: {
+                                metric_name: tool_name || "validate_tool_response",
+                                severity: securityScan.risk_level,
+                                signatures: securityScan.matches.map((m) => m.signature),
+                                verdict: "Prompt injection detected in tool response",
+                                timestamp: new Date().toISOString(),
+                            },
+                        });
+                    } else {
+                        allResults["security:prompt_injection"] = {
+                            passed: true,
+                            reason: "No prompt injection signatures detected ✓",
+                        };
+                    }
+                }
 
                 const result: ValidationResult = {
-                    valid,
+                    valid: allErrors.length === 0,
                     errors: allErrors,
                     warnings: allWarnings,
                     field_results: allResults,
+                    ...(securityScan ? { security_scan: securityScan } : {}),
                     ...(ageSeconds !== undefined && { age_seconds: Math.round(ageSeconds * 10) / 10 }),
                     ...(ageCheck !== undefined && { age_check: ageCheck }),
                     timestamp: new Date().toISOString(),

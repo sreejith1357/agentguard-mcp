@@ -121,9 +121,8 @@ docker run -p 3000:3000 \
   "mcpServers": {
     "agentguard": {
       "command": "npx",
-      "args": ["-y", "agentguard-mcp-server"],
+      "args": ["-y", "agentguard-mcp-server", "--stdio"],
       "env": {
-        "PORT": "3000",
         "RATE_LIMIT_MAX": "500"
       }
     }

@@ -1,12 +1,12 @@
 /**
- * AgentGuard MCP v3.1.0 — API Key & Tenant Management Store
+ * AgentGuard MCP v3.1.2 — API Key & Tenant Management Store
  *
- * Provides cryptographic generation, SHA-256 hashing, lookup, creation,
- * and revocation of tenant API keys backed by SQLite.
+ * Provides cryptographic generation, SHA-256 hashing, expiry & scope enforcement,
+ * lookup, creation, and revocation of tenant API keys backed by SQLite.
  */
 
-import crypto from "crypto";
-import db from "../db/schema";
+import crypto from "node:crypto";
+import db from "../db/schema.js";
 
 export interface TenantRecord {
     tenant_id: string;
@@ -19,23 +19,14 @@ export interface TenantRecord {
     email?: string | null;
 }
 
-export interface ApiKeyRecord {
-    id: string;
-    tenant_id: string;
-    key_hash: string;
-    prefix: string;
-    name: string;
-    is_active: number;
-    created_at: string;
-    last_used_at: string | null;
-}
-
 export interface ApiKeySummary {
     id: string;
     tenant_id: string;
     prefix: string;
     name: string;
     is_active: boolean;
+    expires_at: string | null;
+    scopes: string[] | null;
     created_at: string;
     last_used_at: string | null;
 }
@@ -45,9 +36,11 @@ export interface ValidatedKeyContext {
     plan: "free" | "starter" | "pro" | "team";
     monthly_quota: number;
     status: "active" | "suspended";
+    expires_at: string | null;
+    scopes: string[] | null;
 }
 
-const PLAN_QUOTAS: Record<string, number> = {
+export const PLAN_QUOTAS: Record<string, number> = {
     free: 1000,
     starter: 50000,
     pro: 500000,
@@ -58,15 +51,26 @@ const PLAN_QUOTAS: Record<string, number> = {
 const keyCache = new Map<string, { data: ValidatedKeyContext | null; expiresAt: number }>();
 const CACHE_TTL_MS = 30000; // 30 seconds
 
-/**
- * Computes SHA-256 hash of a raw API key string
- */
+export function clearApiKeyCache(): void {
+    keyCache.clear();
+}
+
 export function hashApiKey(rawKey: string): string {
     return crypto.createHash("sha256").update(rawKey).digest("hex");
 }
 
+function parseScopes(raw: string | null | undefined): string[] | null {
+    if (!raw) return null;
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) && parsed.length > 0 ? parsed.map(String) : null;
+    } catch {
+        return null;
+    }
+}
+
 /**
- * Validates a raw API key string against the database
+ * Validates a raw API key string against the database (checks active status, tenant status, and expiry).
  */
 export function verifyApiKey(rawKey: string): ValidatedKeyContext | null {
     if (!rawKey || typeof rawKey !== "string") return null;
@@ -76,24 +80,42 @@ export function verifyApiKey(rawKey: string): ValidatedKeyContext | null {
 
     const cached = keyCache.get(keyHash);
     if (cached && cached.expiresAt > now) {
+        if (cached.data?.expires_at && new Date(cached.data.expires_at).getTime() <= now) {
+            keyCache.delete(keyHash);
+            return null;
+        }
         return cached.data;
     }
 
     try {
         const stmt = db.prepare(`
-            SELECT k.tenant_id, t.plan, t.monthly_quota, t.status, k.id
+            SELECT k.tenant_id, t.plan, t.monthly_quota, t.status, k.id, k.expires_at, k.scopes_json
             FROM api_keys k
             JOIN tenants t ON k.tenant_id = t.tenant_id
             WHERE k.key_hash = ? AND k.is_active = 1 AND t.status = 'active'
         `);
-        const row = stmt.get(keyHash) as { tenant_id: string; plan: string; monthly_quota: number; status: string; id: string } | undefined;
+        const row = stmt.get(keyHash) as {
+            tenant_id: string;
+            plan: string;
+            monthly_quota: number;
+            status: string;
+            id: string;
+            expires_at: string | null;
+            scopes_json: string | null;
+        } | undefined;
 
         if (!row) {
             keyCache.set(keyHash, { data: null, expiresAt: now + CACHE_TTL_MS });
             return null;
         }
 
-        // Update last_used_at timestamp asynchronously
+        // Enforce key expiration if set
+        if (row.expires_at && new Date(row.expires_at).getTime() <= now) {
+            keyCache.set(keyHash, { data: null, expiresAt: now + CACHE_TTL_MS });
+            return null;
+        }
+
+        // Update last_used_at timestamp safely
         try {
             db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").run(new Date().toISOString(), row.id);
         } catch { /* ignore non-critical update failure */ }
@@ -103,6 +125,8 @@ export function verifyApiKey(rawKey: string): ValidatedKeyContext | null {
             plan: (row.plan as any) || "free",
             monthly_quota: row.monthly_quota || PLAN_QUOTAS[row.plan] || 1000,
             status: (row.status as any) || "active",
+            expires_at: row.expires_at || null,
+            scopes: parseScopes(row.scopes_json),
         };
 
         keyCache.set(keyHash, { data: context, expiresAt: now + CACHE_TTL_MS });
@@ -114,9 +138,23 @@ export function verifyApiKey(rawKey: string): ValidatedKeyContext | null {
 }
 
 /**
- * Generates a new API key for a tenant
+ * Generates a new API key for a tenant with optional expiration (days or ISO timestamp) and tool scopes.
  */
-export function createApiKey(params: { tenant_id: string; name: string }): { key: string; id: string; prefix: string; tenant_id: string; name: string } {
+export function createApiKey(params: {
+    tenant_id: string;
+    name?: string;
+    expires_in_days?: number;
+    expires_at?: string;
+    scopes?: string[];
+}): {
+    key: string;
+    id: string;
+    prefix: string;
+    tenant_id: string;
+    name: string;
+    expires_at: string | null;
+    scopes: string[] | null;
+} {
     const tenant = getTenant(params.tenant_id);
     if (!tenant) {
         throw new Error(`Tenant '${params.tenant_id}' does not exist.`);
@@ -128,18 +166,38 @@ export function createApiKey(params: { tenant_id: string; name: string }): { key
     const prefix = rawKey.slice(0, 15) + "...";
     const id = `key_${crypto.randomBytes(8).toString("hex")}`;
     const createdAt = new Date().toISOString();
+    const keyName = params.name?.trim() || "Default Key";
+
+    let expiresAt: string | null = null;
+    if (params.expires_at) {
+        const d = new Date(params.expires_at);
+        if (Number.isNaN(d.getTime())) {
+            throw new Error(`Invalid expires_at timestamp: '${params.expires_at}'`);
+        }
+        expiresAt = d.toISOString();
+    } else if (typeof params.expires_in_days === "number" && params.expires_in_days > 0) {
+        expiresAt = new Date(Date.now() + params.expires_in_days * 24 * 60 * 60 * 1000).toISOString();
+    }
+
+    const cleanScopes =
+        Array.isArray(params.scopes) && params.scopes.length > 0
+            ? params.scopes.map((s) => s.trim()).filter(Boolean)
+            : null;
+    const scopesJson = cleanScopes && cleanScopes.length > 0 ? JSON.stringify(cleanScopes) : null;
 
     db.prepare(`
-        INSERT INTO api_keys (id, tenant_id, key_hash, prefix, name, is_active, created_at)
-        VALUES (?, ?, ?, ?, ?, 1, ?)
-    `).run(id, params.tenant_id, keyHash, prefix, params.name || "Default Key", createdAt);
+        INSERT INTO api_keys (id, tenant_id, key_hash, prefix, name, is_active, expires_at, scopes_json, created_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+    `).run(id, params.tenant_id, keyHash, prefix, keyName, expiresAt, scopesJson, createdAt);
 
     return {
         key: rawKey,
         id,
         prefix,
         tenant_id: params.tenant_id,
-        name: params.name || "Default Key",
+        name: keyName,
+        expires_at: expiresAt,
+        scopes: cleanScopes,
     };
 }
 
@@ -150,9 +208,13 @@ export function listApiKeys(tenant_id?: string): ApiKeySummary[] {
     try {
         let rows: any[];
         if (tenant_id && tenant_id !== "all") {
-            rows = db.prepare(`SELECT id, tenant_id, prefix, name, is_active, created_at, last_used_at FROM api_keys WHERE tenant_id = ? ORDER BY created_at DESC`).all(tenant_id);
+            rows = db
+                .prepare(`SELECT id, tenant_id, prefix, name, is_active, expires_at, scopes_json, created_at, last_used_at FROM api_keys WHERE tenant_id = ? ORDER BY created_at DESC`)
+                .all(tenant_id);
         } else {
-            rows = db.prepare(`SELECT id, tenant_id, prefix, name, is_active, created_at, last_used_at FROM api_keys ORDER BY created_at DESC`).all();
+            rows = db
+                .prepare(`SELECT id, tenant_id, prefix, name, is_active, expires_at, scopes_json, created_at, last_used_at FROM api_keys ORDER BY created_at DESC`)
+                .all();
         }
 
         return rows.map((r) => ({
@@ -161,6 +223,8 @@ export function listApiKeys(tenant_id?: string): ApiKeySummary[] {
             prefix: r.prefix,
             name: r.name,
             is_active: Boolean(r.is_active),
+            expires_at: r.expires_at || null,
+            scopes: parseScopes(r.scopes_json),
             created_at: r.created_at,
             last_used_at: r.last_used_at,
         }));
@@ -171,12 +235,15 @@ export function listApiKeys(tenant_id?: string): ApiKeySummary[] {
 }
 
 /**
- * Revokes an API key
+ * Revokes an API key and selectively invalidates its cached entry.
  */
 export function revokeApiKey(keyId: string): boolean {
     try {
-        const result = db.prepare("UPDATE api_keys SET is_active = 0 WHERE id = ?").run(keyId);
-        keyCache.clear(); // Clear cache on key revocation
+        const existing = db.prepare("SELECT key_hash FROM api_keys WHERE id = ?").get(keyId) as { key_hash: string } | undefined;
+        const result = db.prepare("UPDATE api_keys SET is_active = 0 WHERE id = ? AND is_active = 1").run(keyId);
+        if (existing?.key_hash) {
+            keyCache.delete(existing.key_hash);
+        }
         return result.changes > 0;
     } catch (err) {
         console.error("Error revoking API key:", err);
@@ -187,7 +254,13 @@ export function revokeApiKey(keyId: string): boolean {
 /**
  * Creates or updates a tenant
  */
-export function createTenant(params: { tenant_id: string; name: string; plan?: "free" | "starter" | "pro" | "team"; email?: string; notes?: string }): TenantRecord {
+export function createTenant(params: {
+    tenant_id: string;
+    name: string;
+    plan?: "free" | "starter" | "pro" | "team";
+    email?: string;
+    notes?: string;
+}): TenantRecord {
     const plan = params.plan || "free";
     const quota = PLAN_QUOTAS[plan] || 1000;
     const createdAt = new Date().toISOString();
@@ -198,7 +271,9 @@ export function createTenant(params: { tenant_id: string; name: string; plan?: "
         ON CONFLICT(tenant_id) DO UPDATE SET
             name = excluded.name,
             plan = excluded.plan,
-            monthly_quota = excluded.monthly_quota
+            monthly_quota = excluded.monthly_quota,
+            email = COALESCE(excluded.email, tenants.email),
+            notes = COALESCE(excluded.notes, tenants.notes)
     `).run(params.tenant_id, params.name, plan, quota, createdAt, params.email || null, params.notes || null);
 
     return getTenant(params.tenant_id)!;
@@ -207,7 +282,13 @@ export function createTenant(params: { tenant_id: string; name: string; plan?: "
 /**
  * Updates a tenant's plan, status, or notes/email
  */
-export function updateTenantStatus(params: { tenant_id: string; status?: "active" | "suspended"; plan?: "free" | "starter" | "pro" | "team"; notes?: string; email?: string }): TenantRecord | null {
+export function updateTenantStatus(params: {
+    tenant_id: string;
+    status?: "active" | "suspended";
+    plan?: "free" | "starter" | "pro" | "team";
+    notes?: string;
+    email?: string;
+}): TenantRecord | null {
     const tenant = getTenant(params.tenant_id);
     if (!tenant) return null;
 
@@ -223,18 +304,37 @@ export function updateTenantStatus(params: { tenant_id: string; status?: "active
         WHERE tenant_id = ?
     `).run(newStatus, newPlan, newQuota, newNotes || null, newEmail || null, params.tenant_id);
 
-    keyCache.clear();
+    // Selectively invalidate cached keys belonging to this tenant
+    for (const [hash, entry] of keyCache.entries()) {
+        if (entry.data?.tenant_id === params.tenant_id) {
+            keyCache.delete(hash);
+        }
+    }
     return getTenant(params.tenant_id);
 }
 
-
 /**
- * Permanently deletes a tenant and all their API keys and webhooks (cascade)
+ * Permanently deletes a tenant and cascades across all tenant-scoped tables in a transaction.
  */
 export function deleteTenant(tenant_id: string): boolean {
     try {
-        const result = db.prepare("DELETE FROM tenants WHERE tenant_id = ?").run(tenant_id);
-        keyCache.clear();
+        const deleteTx = db.transaction(() => {
+            db.prepare("DELETE FROM call_logs WHERE tenant_id = ?").run(tenant_id);
+            db.prepare("DELETE FROM session_checkpoints WHERE tenant_id = ?").run(tenant_id);
+            db.prepare("DELETE FROM circuit_breakers WHERE tenant_id = ?").run(tenant_id);
+            db.prepare("DELETE FROM metric_observations WHERE tenant_id = ?").run(tenant_id);
+            db.prepare("DELETE FROM metric_baselines WHERE tenant_id = ?").run(tenant_id);
+            db.prepare("DELETE FROM webhook_deliveries WHERE tenant_id = ?").run(tenant_id);
+            db.prepare("DELETE FROM rate_limit_buckets WHERE tenant_id = ?").run(tenant_id);
+            return db.prepare("DELETE FROM tenants WHERE tenant_id = ?").run(tenant_id);
+        });
+
+        const result = deleteTx();
+        for (const [hash, entry] of keyCache.entries()) {
+            if (entry.data?.tenant_id === tenant_id) {
+                keyCache.delete(hash);
+            }
+        }
         return result.changes > 0;
     } catch (err) {
         console.error("Error deleting tenant:", err);
@@ -242,10 +342,6 @@ export function deleteTenant(tenant_id: string): boolean {
     }
 }
 
-
-/**
- * Gets a tenant record
- */
 export function getTenant(tenant_id: string): TenantRecord | null {
     try {
         const row = db.prepare("SELECT * FROM tenants WHERE tenant_id = ?").get(tenant_id) as any;
@@ -265,9 +361,6 @@ export function getTenant(tenant_id: string): TenantRecord | null {
     }
 }
 
-/**
- * Lists all tenants
- */
 export function listTenants(): TenantRecord[] {
     try {
         const rows = db.prepare("SELECT * FROM tenants ORDER BY created_at DESC").all() as any[];

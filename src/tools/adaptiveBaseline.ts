@@ -1,48 +1,65 @@
 /**
- * AgentGuard MCP v2.0.0 — Tool: Adaptive Baseline Learning
+ * AgentGuard MCP v3.1.2 — Tool: Adaptive Baseline Learning
  *
  * Implements online Exponential Moving Average (EMA) learning for agent metrics.
  * Learns normal baseline behavior from continuous observations in real time
- * without external ML dependencies.
- *
- * Formulas used:
- *   α = 2 / (window_size + 1)   (default window_size = 20)
- *   EMA_new = α × value + (1 - α) × EMA_old
- *   Variance_new = α × (value - EMA_old)² + (1 - α) × Variance_old
- *   StdDev = √Variance_new
- *   Confidence % = min(observation_count / window_size, 1.0) × 100
+ * with Winsorization outlier dampening (>4σ clamped), shadow-mode lifecycle,
+ * and degraded baseline detection (high outlier poisoning or stale observations).
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildResponse, buildErrorResponse } from "../utils/response.js";
 import {
-    recordObservation,
-    getBaseline,
-    upsertBaseline,
-    resetBaseline,
-    getRecentObservations,
-    getObservationCount,
+    recordObservationAsync,
+    getBaselineAsync,
+    upsertBaselineAsync,
+    resetBaselineAsync,
+    getRecentObservationsAsync,
+    getObservationCountAsync,
 } from "../utils/metricStore.js";
+import { safeNumericSchema, parseEnvInt } from "../utils/validation.js";
 import type { BaselineStatus } from "../types/index.js";
 
 const OUTLIER_SIGMA_FACTOR = 4.0;
-const MIN_ACTIVE_SAMPLES = 50;
-const MAX_SAFE_VALUE = 1e15;
 
-const safeNumericSchema = z
-    .number()
-    .finite()
-    .refine(
-        (val) => !isNaN(val) && isFinite(val) && Math.abs(val) <= MAX_SAFE_VALUE,
-        {
-            message: `Value must be a finite double-precision number within range [-${MAX_SAFE_VALUE}, ${MAX_SAFE_VALUE}]`,
+export function getBaselineConfig() {
+    return {
+        DEFAULT_WINDOW_SIZE: parseEnvInt("EMA_WINDOW_SIZE", 20, 2, 1000),
+        MIN_ACTIVE_SAMPLES: parseEnvInt("BASELINE_MIN_ACTIVE_SAMPLES", 50, 5, 10000),
+        STALE_DAYS: parseEnvInt("BASELINE_STALE_DAYS", 14, 1, 3650),
+    };
+}
+
+function isBaselineDegraded(params: {
+    observation_count: number;
+    winsorized_count: number;
+    last_observed_at: string;
+    staleDays: number;
+}): { degraded: boolean; reason?: string } {
+    if (params.observation_count >= 10) {
+        const poisonRatio = params.winsorized_count / params.observation_count;
+        if (poisonRatio > 0.3) {
+            return {
+                degraded: true,
+                reason: `High outlier rate (${(poisonRatio * 100).toFixed(1)}% of observations winsorized) — baseline may be drifting or poisoned.`,
+            };
         }
-    );
+    }
 
-// ---------------------------------------------------------------------------
-// Tool registration
-// ---------------------------------------------------------------------------
+    const lastMs = new Date(params.last_observed_at).getTime();
+    if (!Number.isNaN(lastMs)) {
+        const ageDays = (Date.now() - lastMs) / (24 * 60 * 60 * 1000);
+        if (ageDays > params.staleDays) {
+            return {
+                degraded: true,
+                reason: `Baseline is stale (${ageDays.toFixed(1)} days since last observation; threshold ${params.staleDays}d).`,
+            };
+        }
+    }
+
+    return { degraded: false };
+}
 
 export function adaptiveBaselineTools(server: McpServer): void {
     // -----------------------------------------------------------------------
@@ -55,16 +72,21 @@ export function adaptiveBaselineTools(server: McpServer): void {
             description:
                 "Record a real observed metric value so AgentGuard can learn normal baseline behavior over time. " +
                 "Includes Winsorization outlier dampening (>4σ clamped) and a shadow mode lifecycle. " +
-                "Reaches 'active' status after 20+ observations. In active status, detect_anomaly uses it automatically.",
+                "Reaches 'active' status after reaching the active sample threshold (default: 50 observations).",
             inputSchema: {
                 metric_name: z
                     .string()
                     .min(1)
                     .max(128)
-                    .describe(
-                        "Unique name for this metric (e.g. weather_api.response_time_ms)"
-                    ),
+                    .describe("Unique name for this metric (e.g. weather_api.response_time_ms)"),
                 value: safeNumericSchema.describe("The observed numeric value to record"),
+                window_size: z
+                    .number()
+                    .int()
+                    .min(2)
+                    .max(1000)
+                    .optional()
+                    .describe("Optional EMA smoothing window size when initializing a new metric (default: EMA_WINDOW_SIZE env or 20)"),
                 context: z
                     .string()
                     .max(300)
@@ -72,14 +94,14 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     .describe("Optional context about this observation"),
             },
         },
-        async ({ metric_name, value, context }) => {
+        async ({ metric_name, value, window_size: requestedWindowSize, context }) => {
             try {
-                // 1. Record raw observation in time-series table
-                recordObservation(metric_name, value);
+                const { DEFAULT_WINDOW_SIZE, MIN_ACTIVE_SAMPLES, STALE_DAYS } = getBaselineConfig();
 
-                // 2. Load existing baseline row
-                const existing = getBaseline(metric_name);
-                const window_size = existing?.window_size ?? 20;
+                await recordObservationAsync(metric_name, value);
+
+                const existing = await getBaselineAsync(metric_name);
+                const window_size = existing?.window_size ?? requestedWindowSize ?? DEFAULT_WINDOW_SIZE;
                 const alpha = 2 / (window_size + 1);
 
                 let ema_mean: number;
@@ -92,7 +114,6 @@ export function adaptiveBaselineTools(server: McpServer): void {
                 const now = new Date().toISOString();
 
                 if (!existing || existing.observation_count === 0) {
-                    // First observation
                     ema_mean = value;
                     ema_variance = 0;
                     observation_count = 1;
@@ -103,19 +124,16 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     const oldStdDev = Math.sqrt(oldVariance);
                     const effectiveStdDev = oldStdDev > 0 ? oldStdDev : Math.max(0.05 * Math.abs(oldMean), 1.0);
 
-                    // Outlier dampening (Winsorization): clamp value if > 4 standard deviations
                     if (existing.observation_count >= 3) {
                         const diff = value - oldMean;
                         const thresholdDelta = OUTLIER_SIGMA_FACTOR * effectiveStdDev;
                         if (Math.abs(diff) > thresholdDelta) {
                             is_winsorized = true;
-                            effective_value =
-                                oldMean + (diff > 0 ? 1 : -1) * thresholdDelta;
+                            effective_value = oldMean + (diff > 0 ? 1 : -1) * thresholdDelta;
                             winsorized_count += 1;
                         }
                     }
 
-                    // Update existing EMA and Variance using effective (dampened) value
                     ema_mean = alpha * effective_value + (1 - alpha) * oldMean;
                     ema_variance =
                         alpha * Math.pow(effective_value - oldMean, 2) +
@@ -124,12 +142,20 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     first_observed_at = existing.first_observed_at;
                 }
 
-                // Determine baseline status lifecycle: 'learning' -> 'active' (>= 50 samples)
-                const status: BaselineStatus =
-                    observation_count >= MIN_ACTIVE_SAMPLES ? "active" : "learning";
+                const degradation = isBaselineDegraded({
+                    observation_count,
+                    winsorized_count,
+                    last_observed_at: now,
+                    staleDays: STALE_DAYS,
+                });
 
-                // 3. Persist updated baseline statistics to SQLite
-                upsertBaseline(metric_name, {
+                const status: BaselineStatus = degradation.degraded
+                    ? "degraded"
+                    : observation_count >= MIN_ACTIVE_SAMPLES
+                    ? "active"
+                    : "learning";
+
+                await upsertBaselineAsync(metric_name, {
                     ema_mean,
                     ema_variance,
                     observation_count,
@@ -140,14 +166,15 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     window_size,
                 });
 
-                // 4. Calculate response metrics
                 const current_stddev = Math.sqrt(ema_variance);
                 const confidence_percent = Number(
                     (Math.min(observation_count / MIN_ACTIVE_SAMPLES, 1.0) * 100).toFixed(2)
                 );
 
                 const message =
-                    status === "learning"
+                    status === "degraded"
+                        ? `Baseline marked degraded: ${degradation.reason}`
+                        : status === "learning"
                         ? `Recorded observation ${observation_count}/${MIN_ACTIVE_SAMPLES} (shadow mode). Need ${
                               MIN_ACTIVE_SAMPLES - observation_count
                           } more for active status.`
@@ -165,6 +192,7 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     confidence_percent,
                     status,
                     learning_status: status,
+                    window_size,
                     message,
                     ...(context && { context }),
                     timestamp: now,
@@ -200,7 +228,8 @@ export function adaptiveBaselineTools(server: McpServer): void {
         },
         async ({ metric_name, include_recent_observations }) => {
             try {
-                const baseline = getBaseline(metric_name);
+                const { DEFAULT_WINDOW_SIZE, MIN_ACTIVE_SAMPLES, STALE_DAYS } = getBaselineConfig();
+                const baseline = await getBaselineAsync(metric_name);
 
                 if (!baseline || baseline.observation_count === 0) {
                     return buildResponse({
@@ -212,19 +241,30 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     });
                 }
 
-                const total_count = getObservationCount(metric_name);
+                const total_count = await getObservationCountAsync(metric_name);
+                const effectiveCount = Math.max(total_count, baseline.observation_count);
                 const mean = baseline.ema_mean;
                 const variance = baseline.ema_variance;
                 const stddev = Math.sqrt(variance);
-                const window_size = baseline.window_size || 20;
+                const window_size = baseline.window_size || DEFAULT_WINDOW_SIZE;
 
                 const confidence_percent = Number(
-                    (Math.min(total_count / MIN_ACTIVE_SAMPLES, 1.0) * 100).toFixed(2)
+                    (Math.min(effectiveCount / MIN_ACTIVE_SAMPLES, 1.0) * 100).toFixed(2)
                 );
-                const status: BaselineStatus = baseline.status ?? (total_count >= MIN_ACTIVE_SAMPLES ? "active" : "learning");
+
+                const degradation = isBaselineDegraded({
+                    observation_count: effectiveCount,
+                    winsorized_count: baseline.winsorized_count ?? 0,
+                    last_observed_at: baseline.last_observed_at,
+                    staleDays: STALE_DAYS,
+                });
+
+                const status: BaselineStatus = degradation.degraded
+                    ? "degraded"
+                    : baseline.status ?? (effectiveCount >= MIN_ACTIVE_SAMPLES ? "active" : "learning");
 
                 const recent_observations = include_recent_observations
-                    ? getRecentObservations(metric_name, 10).map((obs) => ({
+                    ? (await getRecentObservationsAsync(metric_name, 10)).map((obs) => ({
                           id: obs.id,
                           value: obs.value,
                           recorded_at: obs.recorded_at,
@@ -236,9 +276,10 @@ export function adaptiveBaselineTools(server: McpServer): void {
                     mean: Number(mean.toFixed(4)),
                     stddev: Number(stddev.toFixed(4)),
                     variance: Number(variance.toFixed(6)),
-                    observation_count: total_count,
+                    observation_count: effectiveCount,
                     status,
                     learning_status: status,
+                    ...(degradation.degraded ? { degradation_reason: degradation.reason } : {}),
                     winsorized_count: baseline.winsorized_count ?? 0,
                     confidence_percent,
                     active_threshold_samples: MIN_ACTIVE_SAMPLES,
@@ -253,9 +294,7 @@ export function adaptiveBaselineTools(server: McpServer): void {
                         low_3sigma: Number((mean - 3 * stddev).toFixed(4)),
                         high_3sigma: Number((mean + 3 * stddev).toFixed(4)),
                     },
-                    ...(include_recent_observations && {
-                        recent_observations,
-                    }),
+                    ...(include_recent_observations && { recent_observations }),
                     timestamp: new Date().toISOString(),
                 });
             } catch (error) {
@@ -297,7 +336,7 @@ export function adaptiveBaselineTools(server: McpServer): void {
         async ({ metric_name, hard_delete, reason }) => {
             try {
                 const now = new Date().toISOString();
-                const existing = getBaseline(metric_name);
+                const existing = await getBaselineAsync(metric_name);
 
                 if (!existing) {
                     return buildResponse({
@@ -309,7 +348,7 @@ export function adaptiveBaselineTools(server: McpServer): void {
                 }
 
                 const shouldDelete = hard_delete ?? true;
-                resetBaseline(metric_name, shouldDelete);
+                await resetBaselineAsync(metric_name, shouldDelete);
 
                 return buildResponse({
                     metric_name,

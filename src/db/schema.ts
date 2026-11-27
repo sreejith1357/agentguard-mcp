@@ -36,9 +36,7 @@ if (!fs.existsSync(dbDir)) {
 // Open database
 // ---------------------------------------------------------------------------
 
-const db = new Database(DB_PATH, {
-    verbose: process.env.NODE_ENV !== "production" ? undefined : undefined,
-});
+const db = new Database(DB_PATH);
 
 // WAL mode for concurrent read performance and crash safety
 db.pragma("journal_mode = WAL");
@@ -53,23 +51,45 @@ db.pragma("auto_vacuum = INCREMENTAL");
 db.pragma("foreign_keys = ON");
 
 // ---------------------------------------------------------------------------
-// Schema initialisation
+// Schema initialisation & migration tracking
 // ---------------------------------------------------------------------------
 
-function ensureColumnsExist(table: string, columns: { name: string; type: string; defaultVal: string }[]): void {
+let schemaInitialized = false;
+
+function ensureColumnsExist(
+    table: string,
+    columns: { name: string; type: string; defaultVal?: string; notNull?: boolean }[]
+): void {
     try {
         const tableInfo = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
         const existing = new Set(tableInfo.map((col) => col.name));
 
         for (const col of columns) {
             if (tableInfo.length > 0 && !existing.has(col.name)) {
-                db.exec(`ALTER TABLE ${table} ADD COLUMN ${col.name} ${col.type} NOT NULL DEFAULT '${col.defaultVal}'`);
+                const nullClause = col.notNull && col.defaultVal !== undefined
+                    ? ` NOT NULL DEFAULT '${col.defaultVal}'`
+                    : col.defaultVal !== undefined
+                    ? ` DEFAULT '${col.defaultVal}'`
+                    : "";
+                db.exec(`ALTER TABLE ${table} ADD COLUMN ${col.name} ${col.type}${nullClause}`);
             }
         }
     } catch { /* ignore if table doesn't exist yet */ }
 }
 
-export function initializeDatabase(): void {
+export function initializeDatabase(force: boolean = false): void {
+    if (schemaInitialized && !force) return;
+
+    // -----------------------------------------------------------------------
+    // Table: schema_migrations
+    // -----------------------------------------------------------------------
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version     TEXT PRIMARY KEY,
+            description TEXT NOT NULL,
+            applied_at  TEXT NOT NULL
+        )
+    `);
     // -----------------------------------------------------------------------
     // Table: session_checkpoints
     // -----------------------------------------------------------------------
@@ -93,8 +113,8 @@ export function initializeDatabase(): void {
     `);
 
     ensureColumnsExist("session_checkpoints", [
-        { name: "tenant_id", type: "TEXT", defaultVal: "default-tenant" },
-        { name: "project_id", type: "TEXT", defaultVal: "default-project" },
+        { name: "tenant_id", type: "TEXT", defaultVal: "default-tenant", notNull: true },
+        { name: "project_id", type: "TEXT", defaultVal: "default-project", notNull: true },
     ]);
 
     db.exec(`
@@ -128,20 +148,34 @@ export function initializeDatabase(): void {
 
     db.exec(`
         CREATE TABLE IF NOT EXISTS circuit_breakers (
-            tenant_id       TEXT NOT NULL DEFAULT 'default-tenant',
-            project_id      TEXT NOT NULL DEFAULT 'default-project',
-            name            TEXT NOT NULL,
-            state           TEXT NOT NULL DEFAULT 'CLOSED'
-                            CHECK (state IN ('CLOSED', 'OPEN', 'HALF_OPEN')),
-            failure_count   INTEGER NOT NULL DEFAULT 0,
-            success_count   INTEGER NOT NULL DEFAULT 0,
-            last_failure_at TEXT,
-            last_success_at TEXT,
-            opened_at       TEXT,
-            half_opened_at  TEXT,
-            updated_at      TEXT NOT NULL,
+            tenant_id             TEXT NOT NULL DEFAULT 'default-tenant',
+            project_id            TEXT NOT NULL DEFAULT 'default-project',
+            name                  TEXT NOT NULL,
+            state                   TEXT NOT NULL DEFAULT 'CLOSED'
+                                    CHECK (state IN ('CLOSED', 'OPEN', 'HALF_OPEN')),
+            failure_count           INTEGER NOT NULL DEFAULT 0,
+            success_count           INTEGER NOT NULL DEFAULT 0,
+            half_open_success_count INTEGER NOT NULL DEFAULT 0,
+            last_failure_at         TEXT,
+            last_success_at         TEXT,
+            opened_at               TEXT,
+            half_opened_at          TEXT,
+            last_error              TEXT,
+            last_response_time_ms   REAL,
+            updated_at              TEXT NOT NULL,
             PRIMARY KEY (tenant_id, project_id, name)
         )
+    `);
+
+    ensureColumnsExist("circuit_breakers", [
+        { name: "half_open_success_count", type: "INTEGER", defaultVal: "0", notNull: true },
+        { name: "last_error", type: "TEXT" },
+        { name: "last_response_time_ms", type: "REAL" },
+    ]);
+
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_circuit_breakers_state
+            ON circuit_breakers (state)
     `);
 
     // -----------------------------------------------------------------------
@@ -159,8 +193,8 @@ export function initializeDatabase(): void {
     `);
 
     ensureColumnsExist("metric_observations", [
-        { name: "tenant_id", type: "TEXT", defaultVal: "default-tenant" },
-        { name: "project_id", type: "TEXT", defaultVal: "default-project" },
+        { name: "tenant_id", type: "TEXT", defaultVal: "default-tenant", notNull: true },
+        { name: "project_id", type: "TEXT", defaultVal: "default-project", notNull: true },
     ]);
 
     db.exec(`
@@ -201,10 +235,10 @@ export function initializeDatabase(): void {
     `);
 
     ensureColumnsExist("metric_baselines", [
-        { name: "tenant_id", type: "TEXT", defaultVal: "default-tenant" },
-        { name: "project_id", type: "TEXT", defaultVal: "default-project" },
-        { name: "status", type: "TEXT", defaultVal: "learning" },
-        { name: "winsorized_count", type: "INTEGER", defaultVal: "0" },
+        { name: "tenant_id", type: "TEXT", defaultVal: "default-tenant", notNull: true },
+        { name: "project_id", type: "TEXT", defaultVal: "default-project", notNull: true },
+        { name: "status", type: "TEXT", defaultVal: "learning", notNull: true },
+        { name: "winsorized_count", type: "INTEGER", defaultVal: "0", notNull: true },
     ]);
 
     // -----------------------------------------------------------------------
@@ -275,11 +309,18 @@ export function initializeDatabase(): void {
             prefix       TEXT NOT NULL,
             name         TEXT NOT NULL,
             is_active    INTEGER NOT NULL DEFAULT 1,
+            expires_at   TEXT,
+            scopes_json  TEXT,
             created_at   TEXT NOT NULL,
             last_used_at TEXT,
             FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
         )
     `);
+
+    ensureColumnsExist("api_keys", [
+        { name: "expires_at", type: "TEXT" },
+        { name: "scopes_json", type: "TEXT" },
+    ]);
 
     db.exec(`
         CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)
@@ -310,6 +351,38 @@ export function initializeDatabase(): void {
     `);
 
     // -----------------------------------------------------------------------
+    // Table: webhook_deliveries
+    // -----------------------------------------------------------------------
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS webhook_deliveries (
+            id            TEXT PRIMARY KEY,
+            webhook_id    TEXT NOT NULL,
+            tenant_id     TEXT NOT NULL,
+            event         TEXT NOT NULL,
+            status_code   INTEGER,
+            success       INTEGER NOT NULL DEFAULT 0,
+            attempt       INTEGER NOT NULL DEFAULT 1,
+            error_message TEXT,
+            delivered_at  TEXT NOT NULL
+        )
+    `);
+
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_tenant ON webhook_deliveries(tenant_id, delivered_at DESC)
+    `);
+
+    // -----------------------------------------------------------------------
+    // Table: rate_limit_buckets
+    // -----------------------------------------------------------------------
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+            tenant_id    TEXT PRIMARY KEY,
+            window_start INTEGER NOT NULL,
+            count        INTEGER NOT NULL DEFAULT 0
+        )
+    `);
+
+    // -----------------------------------------------------------------------
     // Table: admin_audit_logs
     // -----------------------------------------------------------------------
     db.exec(`
@@ -326,6 +399,14 @@ export function initializeDatabase(): void {
     db.exec(`
         CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON admin_audit_logs(created_at DESC)
     `);
+
+    // Record schema migration version
+    db.prepare(`
+        INSERT OR IGNORE INTO schema_migrations (version, description, applied_at)
+        VALUES (?, ?, ?)
+    `).run("3.1.2", "Enterprise control plane schema with key expiry/scopes, webhook deliveries, circuit telemetry, and rate limit buckets", new Date().toISOString());
+
+    schemaInitialized = true;
 }
 
 // Run immediately when the module is first imported

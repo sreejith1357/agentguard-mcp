@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AgentGuard MCP — Admin Console v3.1.0</title>
+  <title>AgentGuard MCP — Admin Console v3.1.2</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -178,7 +178,7 @@
       <div>
         <div class="header-title">
           <span>AgentGuard MCP Admin Console</span>
-          <span class="badge-v3">v3.1.0 Enterprise</span>
+          <span class="badge-v3">v3.1.2 Enterprise</span>
         </div>
         <p style="color: #94a3b8; font-size: 13px; margin-top: 4px;">
           Operational gateway for multi-tenant keys, subscriptions, circuit breakers, and audit security.
@@ -444,6 +444,9 @@
               <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-family: monospace; color: #cbd5e1; cursor: pointer;">
                 <input type="checkbox" id="evtQuota" checked style="accent-color: #00ff87;"> quota.warning
               </label>
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-family: monospace; color: #cbd5e1; cursor: pointer;">
+                <input type="checkbox" id="evtLoop" checked style="accent-color: #00ff87;"> loop.detected
+              </label>
             </div>
           </div>
           <button type="submit" class="btn-submit" style="background: #a855f7; color: #fff; max-width: 200px;">
@@ -623,6 +626,15 @@
     let usageStatsCache = {};
 
     // ─── HELPERS ──────────────────────────────────────────────────────────────
+    function escapeHtml(val) {
+      if (val === null || val === undefined) return '';
+      return String(val)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
     function getServerUrl() { return document.getElementById('serverUrlInput').value.replace(/\/$/, ''); }
     function getAdminKey()  { return document.getElementById('adminKeyInput').value.trim(); }
     function authHeaders()  { const k = getAdminKey(); return k ? { Authorization: `Bearer ${k}` } : {}; }
@@ -684,8 +696,8 @@
               return `
                 <div>
                   <div style="display: flex; justify-content: space-between; font-size: 12px; font-family: monospace; margin-bottom: 4px;">
-                    <span style="font-weight: 700; color: #00ff87;">${t.tool_name}</span>
-                    <span>${t.count.toLocaleString()} calls (${percent}%)</span>
+                    <span style="font-weight: 700; color: #00ff87;">${escapeHtml(t.tool_name)}</span>
+                    <span>${Number(t.count).toLocaleString()} calls (${percent}%)</span>
                   </div>
                   <div style="width: 100%; background: #0a0a0f; border-radius: 9999px; height: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.05);">
                     <div style="background: linear-gradient(90deg, #00ff87, #06b6d4); height: 100%; width: ${percent}%; border-radius: 9999px;"></div>
@@ -705,7 +717,7 @@
           document.getElementById('statTenants').innerText = allTenantsCache.length || 1;
 
           // Populate tenant dropdowns for Keys and Webhooks forms
-          const optionsHtml = allTenantsCache.map(t => `<option value="${t.tenant_id}">${t.name} (${t.tenant_id}) — ${t.plan.toUpperCase()}</option>`).join('');
+          const optionsHtml = allTenantsCache.map(t => `<option value="${escapeHtml(t.tenant_id)}">${escapeHtml(t.name)} (${escapeHtml(t.tenant_id)}) — ${escapeHtml(String(t.plan).toUpperCase())}</option>`).join('');
           document.getElementById('selectKeyTenant').innerHTML     = optionsHtml || '<option value="default-tenant">Default Tenant</option>';
           document.getElementById('selectWebhookTenant').innerHTML = optionsHtml || '<option value="default-tenant">Default Tenant</option>';
 
@@ -726,7 +738,6 @@
           const d = await circuitsRes.json();
           const circuits = d.circuits || [];
           const openCount     = circuits.filter(c => c.state === 'OPEN').length;
-          const halfOpenCount = circuits.filter(c => c.state === 'HALF_OPEN').length;
           document.getElementById('statCircuits').innerHTML =
             `${circuits.length}${openCount > 0 ? ` <span style="font-size: 11px; color: #f87171; background: rgba(239,68,68,0.2); padding: 2px 8px; border-radius: 9999px; margin-left: 6px;">${openCount} OPEN</span>` : ''}`;
 
@@ -738,22 +749,22 @@
                 <div class="circuit-card">
                   <div>
                     <div class="circuit-header">
-                      <span style="font-family: monospace; font-size: 12px; font-weight: 700; color: #ffffff;">${c.name}</span>
-                      <span class="state-badge ${stateClass}">${c.state}</span>
+                      <span style="font-family: monospace; font-size: 12px; font-weight: 700; color: #ffffff;">${escapeHtml(c.name)}</span>
+                      <span class="state-badge ${stateClass}">${escapeHtml(c.state)}</span>
                     </div>
                     <div style="font-size: 12px; font-family: monospace; color: #94a3b8; display: flex; flex-direction: column; gap: 4px;">
                       <div style="display: flex; justify-content: space-between;">
                         <span>Failures:</span>
-                        <span style="color: ${c.failure_count > 0 ? '#f87171' : '#cbd5e1'}; font-weight: 700;">${c.failure_count} / 5</span>
+                        <span style="color: ${c.failure_count > 0 ? '#f87171' : '#cbd5e1'}; font-weight: 700;">${Number(c.failure_count)} / 5</span>
                       </div>
                       <div style="display: flex; justify-content: space-between;">
                         <span>Successes:</span>
-                        <span style="color: #cbd5e1;">${c.success_count}</span>
+                        <span style="color: #cbd5e1;">${Number(c.success_count)}</span>
                       </div>
                     </div>
                   </div>
                   ${c.state !== 'CLOSED' ? `
-                    <button onclick="handleResetCircuit('${encodeURIComponent(c.name)}')" class="btn-reset">
+                    <button data-action="reset-circuit" data-circuit="${escapeHtml(c.name)}" class="btn-reset">
                       ↺ Reset Circuit
                     </button>
                   ` : ''}
@@ -773,16 +784,16 @@
           if (webhooks.length > 0) {
             tbody.innerHTML = webhooks.map(w => `
               <tr>
-                <td style="font-weight: 700; color: #c084fc;">${w.id}</td>
-                <td style="color: #ffffff;">${w.tenant_id}</td>
-                <td style="color: #cbd5e1; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${w.url}</td>
+                <td style="font-weight: 700; color: #c084fc;">${escapeHtml(w.id)}</td>
+                <td style="color: #ffffff;">${escapeHtml(w.tenant_id)}</td>
+                <td style="color: #cbd5e1; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(w.url)}</td>
                 <td>
                   <div class="event-badges">
-                    ${(w.events || []).map(ev => `<span class="event-badge">${ev}</span>`).join('')}
+                    ${(w.events || []).map(ev => `<span class="event-badge">${escapeHtml(ev)}</span>`).join('')}
                   </div>
                 </td>
                 <td style="text-align: right;">
-                  <button onclick="handleDeleteWebhook('${w.id}')" style="padding: 4px 10px; border-radius: 4px; background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); font-size: 11px; cursor: pointer; font-family: monospace;">
+                  <button data-action="delete-webhook" data-id="${escapeHtml(w.id)}" style="padding: 4px 10px; border-radius: 4px; background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); font-size: 11px; cursor: pointer; font-family: monospace;">
                     Delete
                   </button>
                 </td>
@@ -822,14 +833,15 @@
           const quota = t.monthly_quota || 1000;
           const pct   = Math.min(100, Math.round((used / quota) * 100));
           const barColor = pct >= 90 ? '#f87171' : pct >= 70 ? '#fbbf24' : '#00ff87';
+          const nextStatus = t.status === 'active' ? 'suspended' : 'active';
 
           return `
             <tr>
-              <td style="font-weight: 700; color: #06b6d4;">${t.tenant_id}</td>
-              <td style="color: #ffffff; font-weight: 600;">${t.name}</td>
-              <td style="color: #94a3b8; font-size: 12px;">${t.email || '—'}</td>
+              <td style="font-weight: 700; color: #06b6d4;">${escapeHtml(t.tenant_id)}</td>
+              <td style="color: #ffffff; font-weight: 600;">${escapeHtml(t.name)}</td>
+              <td style="color: #94a3b8; font-size: 12px;">${escapeHtml(t.email) || '—'}</td>
               <td>
-                <select onchange="handleUpdateTenantPlan('${t.tenant_id}', this.value)" style="background: #0a0a0f; border: 1px solid #334155; color: #00ff87; padding: 4px 8px; border-radius: 6px; font-family: monospace; font-size: 12px;">
+                <select data-action="change-plan" data-tenant="${escapeHtml(t.tenant_id)}" style="background: #0a0a0f; border: 1px solid #334155; color: #00ff87; padding: 4px 8px; border-radius: 6px; font-family: monospace; font-size: 12px;">
                   <option value="free"    ${t.plan === 'free'    ? 'selected' : ''}>FREE</option>
                   <option value="starter" ${t.plan === 'starter' ? 'selected' : ''}>STARTER</option>
                   <option value="pro"     ${t.plan === 'pro'     ? 'selected' : ''}>PRO</option>
@@ -839,25 +851,25 @@
               <td>
                 <div style="display: flex; align-items: center; gap: 8px;">
                   <div class="quota-bar-wrap"><div class="quota-bar" style="width: ${pct}%; background: ${barColor};"></div></div>
-                  <span style="font-size: 11px; font-family: monospace; color: #94a3b8;">${used.toLocaleString()}/${quota.toLocaleString()}</span>
+                  <span style="font-size: 11px; font-family: monospace; color: #94a3b8;">${Number(used).toLocaleString()}/${Number(quota).toLocaleString()}</span>
                 </div>
               </td>
               <td>
                 <span style="font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 700; ${t.status === 'active' ? 'background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3);' : 'background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3);'}">
-                  ${t.status.toUpperCase()}
+                  ${escapeHtml(String(t.status).toUpperCase())}
                 </span>
               </td>
               <td style="max-width: 160px; overflow: hidden;">
-                <span style="font-size: 11px; color: #64748b; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${(t.notes || '').replace(/"/g, '&quot;')}">${t.notes || '—'}</span>
-                <button onclick="openNotesModal('${t.tenant_id}', '${t.name}', ${JSON.stringify(t.notes || '')})" style="font-size: 10px; color: #06b6d4; background: none; border: none; cursor: pointer; padding: 2px 0; font-family: monospace;">edit</button>
+                <span style="font-size: 11px; color: #64748b; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(t.notes || '')}">${escapeHtml(t.notes) || '—'}</span>
+                <button data-action="open-notes" data-tenant="${escapeHtml(t.tenant_id)}" style="font-size: 10px; color: #06b6d4; background: none; border: none; cursor: pointer; padding: 2px 0; font-family: monospace;">edit</button>
               </td>
               <td style="text-align: right; white-space: nowrap;">
-                <button onclick="handleToggleTenantStatus('${t.tenant_id}', '${t.status === 'active' ? 'suspended' : 'active'}')"
+                <button data-action="toggle-status" data-tenant="${escapeHtml(t.tenant_id)}" data-status="${nextStatus}"
                   style="padding: 4px 10px; border-radius: 4px; background: ${t.status === 'active' ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.15)'}; color: ${t.status === 'active' ? '#f87171' : '#4ade80'}; border: 1px solid ${t.status === 'active' ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}; font-size: 11px; cursor: pointer; margin-right: 6px; font-family: monospace;">
                   ${t.status === 'active' ? 'Suspend' : 'Activate'}
                 </button>
                 ${t.tenant_id !== 'default-tenant' ? `
-                  <button onclick="handleDeleteTenant('${t.tenant_id}', '${t.name}')"
+                  <button data-action="delete-tenant" data-tenant="${escapeHtml(t.tenant_id)}"
                     style="padding: 4px 10px; border-radius: 4px; background: rgba(239,68,68,0.1); color: #f87171; border: 1px solid rgba(239,68,68,0.2); font-size: 11px; cursor: pointer; font-family: monospace;">
                     Delete
                   </button>
@@ -877,13 +889,13 @@
       if (list.length > 0) {
         tbody.innerHTML = list.map(k => `
           <tr>
-            <td style="font-weight: 700; color: #00ff87;">${k.prefix}</td>
-            <td style="color: #ffffff;">${k.name}</td>
-            <td>${k.tenant_id}</td>
-            <td style="color: #64748b;">${k.created_at ? k.created_at.slice(0, 10) : ''}</td>
-            <td style="color: #64748b;">${k.last_used_at ? k.last_used_at.slice(0, 10) : 'Never'}</td>
+            <td style="font-weight: 700; color: #00ff87;">${escapeHtml(k.prefix)}</td>
+            <td style="color: #ffffff;">${escapeHtml(k.name)}</td>
+            <td>${escapeHtml(k.tenant_id)}</td>
+            <td style="color: #64748b;">${escapeHtml(k.created_at ? k.created_at.slice(0, 10) : '')}</td>
+            <td style="color: #64748b;">${escapeHtml(k.last_used_at ? k.last_used_at.slice(0, 10) : 'Never')}</td>
             <td style="text-align: right;">
-              <button onclick="handleRevokeKey('${k.id}')" style="padding: 4px 10px; border-radius: 4px; background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); font-size: 11px; cursor: pointer; font-family: monospace;">
+              <button data-action="revoke-key" data-id="${escapeHtml(k.id)}" style="padding: 4px 10px; border-radius: 4px; background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); font-size: 11px; cursor: pointer; font-family: monospace;">
                 Revoke
               </button>
             </td>
@@ -900,17 +912,47 @@
       if (list.length > 0) {
         tbody.innerHTML = list.map(a => `
           <tr>
-            <td style="color: #94a3b8; font-size: 11px; white-space: nowrap;">${a.created_at ? a.created_at.replace('T', ' ').slice(0, 19) : ''}</td>
-            <td><span style="background: rgba(6,182,212,0.15); color: #06b6d4; border: 1px solid rgba(6,182,212,0.3); padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 11px;">${a.action}</span></td>
-            <td style="color: #ffffff;">${a.tenant_id || '—'}</td>
-            <td style="color: #cbd5e1;">${a.details || '—'}</td>
-            <td style="color: #64748b; font-size: 11px;">${a.ip_address || 'local'}</td>
+            <td style="color: #94a3b8; font-size: 11px; white-space: nowrap;">${escapeHtml(a.created_at ? a.created_at.replace('T', ' ').slice(0, 19) : '')}</td>
+            <td><span style="background: rgba(6,182,212,0.15); color: #06b6d4; border: 1px solid rgba(6,182,212,0.3); padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 11px;">${escapeHtml(a.action)}</span></td>
+            <td style="color: #ffffff;">${escapeHtml(a.tenant_id) || '—'}</td>
+            <td style="color: #cbd5e1;">${escapeHtml(a.details) || '—'}</td>
+            <td style="color: #64748b; font-size: 11px;">${escapeHtml(a.ip_address) || 'unknown'}</td>
           </tr>
         `).join('');
       } else {
         tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 24px;">No audit events recorded yet.</td></tr>';
       }
     }
+
+    // Delegated UI event listeners (XSS-safe: avoids inline JS string interpolation)
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      const action = btn.getAttribute('data-action');
+      if (action === 'reset-circuit') {
+        handleResetCircuit(encodeURIComponent(btn.getAttribute('data-circuit') || ''));
+      } else if (action === 'delete-webhook') {
+        handleDeleteWebhook(btn.getAttribute('data-id') || '');
+      } else if (action === 'revoke-key') {
+        handleRevokeKey(btn.getAttribute('data-id') || '');
+      } else if (action === 'toggle-status') {
+        handleToggleTenantStatus(btn.getAttribute('data-tenant') || '', btn.getAttribute('data-status') || 'active');
+      } else if (action === 'delete-tenant') {
+        const tid = btn.getAttribute('data-tenant') || '';
+        const t = allTenantsCache.find(x => x.tenant_id === tid);
+        handleDeleteTenant(tid, t ? t.name : tid);
+      } else if (action === 'open-notes') {
+        const tid = btn.getAttribute('data-tenant') || '';
+        const t = allTenantsCache.find(x => x.tenant_id === tid);
+        openNotesModal(tid, t ? t.name : tid, t ? (t.notes || '') : '');
+      }
+    });
+
+    document.addEventListener('change', (e) => {
+      const sel = e.target.closest('select[data-action="change-plan"]');
+      if (!sel) return;
+      handleUpdateTenantPlan(sel.getAttribute('data-tenant') || '', sel.value);
+    });
 
     // ─── FILTER FUNCTIONS ─────────────────────────────────────────────────────
     function filterTenantsTable() {
@@ -964,24 +1006,32 @@
     async function handleUpdateTenantPlan(tenant_id, plan) {
       if (!confirm(`Change plan for '${tenant_id}' to '${plan.toUpperCase()}'?`)) { fetchData(); return; }
       try {
-        const res = await fetch(`${getServerUrl()}/admin/tenants/${tenant_id}`, {
+        const res = await fetch(`${getServerUrl()}/admin/tenants/${encodeURIComponent(tenant_id)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ plan }),
         });
-        handleAuth(res);
+        if (handleAuth(res)) return;
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          alert('Error: ' + (d.error || res.statusText));
+        }
         fetchData();
       } catch (err) { alert('Network error: ' + err.message); }
     }
 
     async function handleToggleTenantStatus(tenant_id, status) {
       try {
-        const res = await fetch(`${getServerUrl()}/admin/tenants/${tenant_id}`, {
+        const res = await fetch(`${getServerUrl()}/admin/tenants/${encodeURIComponent(tenant_id)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ status }),
         });
-        handleAuth(res);
+        if (handleAuth(res)) return;
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          alert('Error: ' + (d.error || res.statusText));
+        }
         fetchData();
       } catch (err) { alert('Network error: ' + err.message); }
     }
@@ -989,15 +1039,15 @@
     async function handleDeleteTenant(tenant_id, name) {
       if (!confirm(`⚠️ PERMANENTLY DELETE tenant '${name}' (${tenant_id})?\n\nThis will also delete all their API keys and webhooks.\n\nThis action cannot be undone.`)) return;
       try {
-        const res = await fetch(`${getServerUrl()}/admin/tenants/${tenant_id}`, {
+        const res = await fetch(`${getServerUrl()}/admin/tenants/${encodeURIComponent(tenant_id)}`, {
           method: 'DELETE',
           headers: authHeaders(),
         });
-        handleAuth(res);
+        if (handleAuth(res)) return;
         if (res.ok) {
           fetchData();
         } else {
-          const d = await res.json();
+          const d = await res.json().catch(() => ({}));
           alert('Error: ' + (d.error || 'Delete failed'));
         }
       } catch (err) { alert('Network error: ' + err.message); }
@@ -1018,12 +1068,17 @@
       const tenant_id = document.getElementById('notesTenantId').value;
       const notes     = document.getElementById('notesTextarea').value.trim();
       try {
-        const res = await fetch(`${getServerUrl()}/admin/tenants/${tenant_id}`, {
+        const res = await fetch(`${getServerUrl()}/admin/tenants/${encodeURIComponent(tenant_id)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ notes }),
         });
-        handleAuth(res);
+        if (handleAuth(res)) return;
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          alert('Error: ' + (d.error || res.statusText));
+          return;
+        }
         closeNotesModal();
         fetchData();
       } catch (err) { alert('Network error: ' + err.message); }
@@ -1033,7 +1088,6 @@
       e.preventDefault();
       const tenant_id = document.getElementById('selectKeyTenant').value;
       const name      = document.getElementById('inputKeyName').value.trim() || 'Production Key';
-      const tenantName = (allTenantsCache.find(t => t.tenant_id === tenant_id) || {}).name || tenant_id;
 
       try {
         const res = await fetch(`${getServerUrl()}/admin/api-keys`, {
@@ -1051,10 +1105,9 @@
           document.getElementById('generatedKeyBox').classList.remove('hidden');
           document.getElementById('inputKeyName').value = '';
           fetchData();
-          // Auto-scroll to key display
           document.getElementById('generatedKeyBox').scrollIntoView({ behavior: 'smooth' });
         } else {
-          const d = await res.json();
+          const d = await res.json().catch(() => ({}));
           alert('Error: ' + (d.error || 'Key creation failed'));
         }
       } catch (err) { alert('Network error: ' + err.message); }
@@ -1063,11 +1116,15 @@
     async function handleRevokeKey(id) {
       if (!confirm('Revoke this API key? Any agents using it will immediately lose access.')) return;
       try {
-        const res = await fetch(`${getServerUrl()}/admin/api-keys/${id}`, {
+        const res = await fetch(`${getServerUrl()}/admin/api-keys/${encodeURIComponent(id)}`, {
           method: 'DELETE',
           headers: authHeaders(),
         });
-        handleAuth(res);
+        if (handleAuth(res)) return;
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          alert('Error: ' + (d.error || res.statusText));
+        }
         fetchData();
       } catch (err) { alert('Network error: ' + err.message); }
     }
@@ -1078,7 +1135,11 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...authHeaders() },
         });
-        handleAuth(res);
+        if (handleAuth(res)) return;
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          alert('Error: ' + (d.error || res.statusText));
+        }
         fetchData();
       } catch (err) { alert('Network error: ' + err.message); }
     }
@@ -1091,6 +1152,7 @@
       if (document.getElementById('evtCircuit').checked) events.push('circuit.tripped');
       if (document.getElementById('evtAnomaly').checked) events.push('anomaly.detected');
       if (document.getElementById('evtQuota').checked)   events.push('quota.warning');
+      if (document.getElementById('evtLoop') && document.getElementById('evtLoop').checked) events.push('loop.detected');
       if (events.length === 0) { alert('Select at least one event to subscribe to.'); return; }
 
       try {
@@ -1100,6 +1162,11 @@
           body: JSON.stringify({ tenant_id, url, events }),
         });
         if (handleAuth(res)) return;
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          alert('Error: ' + (d.error || res.statusText));
+          return;
+        }
         document.getElementById('inputWebhookUrl').value = '';
         fetchData();
       } catch (err) { alert('Network error: ' + err.message); }
@@ -1108,11 +1175,15 @@
     async function handleDeleteWebhook(id) {
       if (!confirm('Delete this webhook subscription?')) return;
       try {
-        const res = await fetch(`${getServerUrl()}/admin/webhooks/${id}`, {
+        const res = await fetch(`${getServerUrl()}/admin/webhooks/${encodeURIComponent(id)}`, {
           method: 'DELETE',
           headers: authHeaders(),
         });
-        handleAuth(res);
+        if (handleAuth(res)) return;
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          alert('Error: ' + (d.error || res.statusText));
+        }
         fetchData();
       } catch (err) { alert('Network error: ' + err.message); }
     }

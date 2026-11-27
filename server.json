@@ -27,11 +27,15 @@
     {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "agentguard-mcp-server"]
+      "args": ["-y", "agentguard-mcp-server", "--stdio"]
     },
     {
       "type": "streamable-http",
       "endpoint": "/mcp"
+    },
+    {
+      "type": "sse",
+      "endpoint": "/sse"
     }
   ]
 }

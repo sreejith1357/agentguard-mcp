@@ -1,12 +1,12 @@
 /**
- * AgentGuard MCP v3.0.0 — Unified Repository Interfaces
+ * AgentGuard MCP v3.1.2 — Unified Repository Interfaces
  *
  * Defines the persistence tier contracts (Repository Pattern) for:
  *   1. ICircuitBreakerRepository
  *   2. IBaselineRepository
  *   3. ICausalTraceRepository
  *
- * Allows seamless runtime swapping between local SQLite and distributed PostgreSQL/Redis.
+ * Allows seamless runtime swapping between local SQLite and distributed PostgreSQL.
  */
 
 import type { CircuitRow, BaselineRow, ObservationRow, CheckpointEntry } from "../types/index.js";
@@ -17,6 +17,25 @@ export interface IDatabaseHealth {
     connection_pooled: boolean;
     latency_ms: number;
     error?: string;
+}
+
+export interface QueryHistoryOptions {
+    session_id: string;
+    limit?: number;
+    offset?: number;
+    checkpoint_type?: string;
+    since_timestamp?: string;
+    until_timestamp?: string;
+    tags?: string[];
+    tag_match?: "all" | "any";
+    tenant_id?: string;
+    project_id?: string;
+}
+
+export interface QueryHistoryResult {
+    entries: CheckpointEntry[];
+    totalFound: number;
+    hasMore?: boolean;
 }
 
 export interface ICircuitBreakerRepository {
@@ -41,15 +60,7 @@ export interface IBaselineRepository {
 export interface ICausalTraceRepository {
     append<T extends object>(sessionId: string, record: T, tenantId?: string, projectId?: string): Promise<void>;
     readAll<T = CheckpointEntry>(sessionId: string, tenantId?: string, projectId?: string): Promise<T[]>;
-    queryHistory(options: {
-        session_id: string;
-        limit?: number;
-        checkpoint_type?: string;
-        since_timestamp?: string;
-        tags?: string[];
-        tenant_id?: string;
-        project_id?: string;
-    }): Promise<{ entries: CheckpointEntry[]; totalFound: number }> | { entries: CheckpointEntry[]; totalFound: number };
+    queryHistory(options: QueryHistoryOptions): Promise<QueryHistoryResult> | QueryHistoryResult;
     getLineageForFailures(sessionId: string, failedCheckpointIds: string[], tenantId?: string, projectId?: string): Promise<CheckpointEntry[]> | CheckpointEntry[];
     countRecords(sessionId: string, tenantId?: string, projectId?: string): Promise<number>;
     getStats(tenantId?: string, projectId?: string): Promise<{ total_sessions: number; total_checkpoints: number }>;

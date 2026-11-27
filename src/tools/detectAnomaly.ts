@@ -8,18 +8,17 @@
  * For string values: uses Levenshtein similarity ratio against baseline strings.
  *
  * Can use manually provided baselines OR learned baselines automatically from
- * the Adaptive Baseline Learning system (when confidence >= 50%).
- *
- * No external libraries — all math is implemented inline to keep the
- * dependency footprint at zero and the logic fully auditable.
+ * the Adaptive Baseline Learning system once active (50+ observations by default).
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildResponse, buildErrorResponse } from "../utils/response.js";
-import { getBaseline } from "../utils/metricStore.js";
+import { getBaselineAsync } from "../utils/metricStore.js";
 import { getTenantContext } from "../utils/auth.js";
 import { dispatchWebhookEvent } from "../utils/webhookDispatcher.js";
+import { safeNumericSchema } from "../utils/validation.js";
+import { getBaselineConfig } from "./adaptiveBaseline.js";
 import type {
     AnomalyReport,
     AnomalySensitivity,
@@ -28,10 +27,7 @@ import type {
     BaselineSummaryString,
 } from "../types/index.js";
 
-
-// ---------------------------------------------------------------------------
-// Math utilities (pure, no deps)
-// ---------------------------------------------------------------------------
+const MAX_STRING_SIMILARITY_LEN = 4096;
 
 function mean(values: number[]): number {
     return values.reduce((s, v) => s + v, 0) / values.length;
@@ -44,11 +40,9 @@ function stddev(values: number[], avg: number): number {
     return Math.sqrt(variance);
 }
 
-/**
- * Levenshtein distance between two strings.
- * O(m * n) space-optimised to two rows.
- */
-function levenshtein(a: string, b: string): number {
+function levenshtein(aRaw: string, bRaw: string): number {
+    const a = aRaw.slice(0, MAX_STRING_SIMILARITY_LEN);
+    const b = bRaw.slice(0, MAX_STRING_SIMILARITY_LEN);
     const m = a.length;
     const n = b.length;
     if (m === 0) return n;
@@ -68,32 +62,25 @@ function levenshtein(a: string, b: string): number {
     return prev[n];
 }
 
-/** Normalised similarity: 1.0 = identical, 0.0 = completely different */
 function similarity(a: string, b: string): number {
-    const maxLen = Math.max(a.length, b.length);
+    const aCap = a.slice(0, MAX_STRING_SIMILARITY_LEN);
+    const bCap = b.slice(0, MAX_STRING_SIMILARITY_LEN);
+    const maxLen = Math.max(aCap.length, bCap.length);
     if (maxLen === 0) return 1.0;
-    return 1 - levenshtein(a, b) / maxLen;
+    return 1 - levenshtein(aCap, bCap) / maxLen;
 }
 
-// ---------------------------------------------------------------------------
-// Sensitivity → threshold mappings
-// ---------------------------------------------------------------------------
-
 const Z_SCORE_THRESHOLDS: Record<AnomalySensitivity, number> = {
-    low: 3.0,    // Only flag extreme outliers (3σ)
-    medium: 2.0, // Standard statistical threshold (2σ)
-    high: 1.5,   // Aggressive — catches subtle drift
+    low: 3.0,
+    medium: 2.0,
+    high: 1.5,
 };
 
 const SIMILARITY_THRESHOLDS: Record<AnomalySensitivity, number> = {
-    low: 0.3,    // Must be at least 30% similar
-    medium: 0.5, // Must be at least 50% similar
-    high: 0.7,   // Must be at least 70% similar
+    low: 0.3,
+    medium: 0.5,
+    high: 0.7,
 };
-
-// ---------------------------------------------------------------------------
-// Severity classification
-// ---------------------------------------------------------------------------
 
 function classifyNumericSeverity(
     zScore: number,
@@ -119,10 +106,6 @@ function classifyStringSeverity(
     return "critical";
 }
 
-// ---------------------------------------------------------------------------
-// Numeric anomaly detection (Manual baseline)
-// ---------------------------------------------------------------------------
-
 function detectNumeric(
     value: number,
     baseline: number[],
@@ -136,10 +119,9 @@ function detectNumeric(
     const maxVal = Math.max(...baseline);
     const threshold = Z_SCORE_THRESHOLDS[sensitivity];
 
-    // Handle zero stddev (all baseline values identical)
     let zScore: number;
     if (sd === 0) {
-        zScore = value === avg ? 0 : Infinity;
+        zScore = value === avg ? 0 : (value > avg ? Infinity : -Infinity);
     } else {
         zScore = (value - avg) / sd;
     }
@@ -163,9 +145,9 @@ function detectNumeric(
         ? `Severity is ${severity.toUpperCase()}. Investigate "${metricName}" before proceeding. Value ${value} deviates significantly from baseline mean of ${avg.toFixed(4)}.`
         : `Value is statistically consistent with baseline. Safe to proceed.`;
 
-    const safeZScore = isFinite(zScore)
+    const safeZScore = Number.isFinite(zScore)
         ? Math.round(zScore * 10000) / 10000
-        : (zScore > 0 ? 999999 : -999999);
+        : (zScore > 0 ? Number.MAX_SAFE_INTEGER : -Number.MAX_SAFE_INTEGER);
 
     return {
         anomaly_detected: anomalyDetected,
@@ -184,10 +166,6 @@ function detectNumeric(
     };
 }
 
-// ---------------------------------------------------------------------------
-// String anomaly detection (Manual baseline)
-// ---------------------------------------------------------------------------
-
 function detectString(
     value: string,
     baseline: string[],
@@ -201,9 +179,9 @@ function detectString(
     const avgSim = similarities.reduce((s, v) => s + v, 0) / similarities.length;
     const threshold = SIMILARITY_THRESHOLDS[sensitivity];
 
-    // Use minimum similarity as the worst-case metric
-    const anomalyDetected = minSim < threshold;
-    const severity = classifyStringSeverity(minSim, sensitivity);
+    // Use maxSim (closest match to any valid baseline example) to avoid false positives when baseline holds diverse valid formats
+    const anomalyDetected = maxSim < threshold;
+    const severity = classifyStringSeverity(maxSim, sensitivity);
 
     const baselineSummary: BaselineSummaryString = {
         min_similarity: Math.round(minSim * 10000) / 10000,
@@ -212,11 +190,11 @@ function detectString(
         count: baseline.length,
     };
 
-    const simPercent = (minSim * 100).toFixed(1);
+    const simPercent = (maxSim * 100).toFixed(1);
     const thresholdPercent = (threshold * 100).toFixed(0);
 
     const verdict = anomalyDetected
-        ? `⚠️ Anomaly detected on "${metricName}": minimum similarity ${simPercent}% is below ${thresholdPercent}% threshold (${sensitivity} sensitivity)`
+        ? `⚠️ Anomaly detected on "${metricName}": best similarity ${simPercent}% is below ${thresholdPercent}% threshold (${sensitivity} sensitivity)`
         : `✅ "${metricName}" is within acceptable similarity range: ${simPercent}% ≥ ${thresholdPercent}%`;
 
     const recommendation = anomalyDetected
@@ -229,7 +207,7 @@ function detectString(
         observed_value: value,
         value_type: "string",
         baseline_summary: baselineSummary,
-        similarity_score: Math.round(minSim * 10000) / 10000,
+        similarity_score: Math.round(maxSim * 10000) / 10000,
         severity,
         sensitivity_used: sensitivity,
         verdict,
@@ -240,23 +218,6 @@ function detectString(
     };
 }
 
-// ---------------------------------------------------------------------------
-// Tool registration
-// ---------------------------------------------------------------------------
-
-const MAX_SAFE_VALUE = 1e15;
-
-const safeNumberSchema = z
-    .number()
-    .finite()
-    .refine((val) => !isNaN(val) && isFinite(val) && Math.abs(val) <= MAX_SAFE_VALUE, {
-        message: `Value must be a finite double-precision number within range [-${MAX_SAFE_VALUE}, ${MAX_SAFE_VALUE}]`,
-    });
-
-// ---------------------------------------------------------------------------
-// Tool registration
-// ---------------------------------------------------------------------------
-
 export function detectAnomalyTool(server: McpServer): void {
     server.registerTool(
         "detect_anomaly",
@@ -265,11 +226,11 @@ export function detectAnomalyTool(server: McpServer): void {
                 "Compare an agent output or metric against expected baseline patterns and flag statistical outliers before they propagate downstream. Uses z-score analysis for numeric values and Levenshtein similarity for strings.",
             inputSchema: {
                 value: z
-                    .union([safeNumberSchema, z.string()])
+                    .union([safeNumericSchema, z.string()])
                     .describe("The current observed value or agent output to check"),
                 baseline: z
                     .union([
-                        z.array(safeNumberSchema).min(1).max(1000),
+                        z.array(safeNumericSchema).min(1).max(1000),
                         z.array(z.string()).min(1).max(1000),
                     ])
                     .optional()
@@ -288,15 +249,13 @@ export function detectAnomalyTool(server: McpServer): void {
                     .optional()
                     .default("medium")
                     .describe(
-                        "Detection sensitivity: 'low' (3σ / 30% similarity — only extreme outliers), 'medium' (2σ / 50% — standard), 'high' (1.5σ / 70% — catches subtle drift)"
+                        "Detection sensitivity: 'low' (3σ / 30% similarity), 'medium' (2σ / 50%), 'high' (1.5σ / 70%)"
                     ),
                 context: z
                     .string()
                     .max(512)
                     .optional()
-                    .describe(
-                        "Optional agent-provided context about what this metric represents"
-                    ),
+                    .describe("Optional agent-provided context about what this metric represents"),
             },
         },
         async ({ value, baseline, metric_name, sensitivity, context }) => {
@@ -307,9 +266,6 @@ export function detectAnomalyTool(server: McpServer): void {
                     Array.isArray(baseline) &&
                     baseline.length > 0;
 
-                // -----------------------------------------------------------
-                // Case 1: Manual baseline provided by caller
-                // -----------------------------------------------------------
                 if (hasManualBaseline) {
                     if (typeof value === "number") {
                         if (!baseline!.every((b) => typeof b === "number")) {
@@ -318,32 +274,16 @@ export function detectAnomalyTool(server: McpServer): void {
                                 metric_name,
                                 observed_value: value,
                                 value_type: "numeric",
-                                baseline_summary: {
-                                    mean: 0,
-                                    stddev: 0,
-                                    min: 0,
-                                    max: 0,
-                                    count: 0,
-                                },
+                                baseline_summary: { mean: 0, stddev: 0, min: 0, max: 0, count: 0 },
                                 severity: "none",
                                 sensitivity_used: sens,
-                                verdict:
-                                    "❌ Type mismatch: value is numeric but baseline contains non-numeric values",
-                                recommendation:
-                                    "Ensure all baseline values are numbers when checking a numeric metric",
+                                verdict: "❌ Type mismatch: value is numeric but baseline contains non-numeric values",
+                                recommendation: "Ensure all baseline values are numbers when checking a numeric metric",
                                 baseline_source: "manual",
                                 timestamp: new Date().toISOString(),
                             });
                         }
-                        return buildResponse(
-                            detectNumeric(
-                                value,
-                                baseline as number[],
-                                sens,
-                                metric_name,
-                                context
-                            )
-                        );
+                        return buildResponse(detectNumeric(value, baseline as number[], sens, metric_name, context));
                     } else {
                         if (!baseline!.every((b) => typeof b === "string")) {
                             return buildResponse<AnomalyReport>({
@@ -351,70 +291,38 @@ export function detectAnomalyTool(server: McpServer): void {
                                 metric_name,
                                 observed_value: value,
                                 value_type: "string",
-                                baseline_summary: {
-                                    min_similarity: 0,
-                                    max_similarity: 0,
-                                    avg_similarity: 0,
-                                    count: 0,
-                                },
+                                baseline_summary: { min_similarity: 0, max_similarity: 0, avg_similarity: 0, count: 0 },
                                 severity: "none",
                                 sensitivity_used: sens,
-                                verdict:
-                                    "❌ Type mismatch: value is string but baseline contains non-string values",
-                                recommendation:
-                                    "Ensure all baseline values are strings when checking a string metric",
+                                verdict: "❌ Type mismatch: value is string but baseline contains non-string values",
+                                recommendation: "Ensure all baseline values are strings when checking a string metric",
                                 baseline_source: "manual",
                                 timestamp: new Date().toISOString(),
                             });
                         }
-                        return buildResponse(
-                            detectString(
-                                value,
-                                baseline as string[],
-                                sens,
-                                metric_name,
-                                context
-                            )
-                        );
+                        return buildResponse(detectString(value, baseline as string[], sens, metric_name, context));
                     }
                 }
 
-                // -----------------------------------------------------------
-                // Case 2: No manual baseline — check for active learned baseline
-                // -----------------------------------------------------------
-                const learnedRow = getBaseline(metric_name);
+                const { MIN_ACTIVE_SAMPLES } = getBaselineConfig();
+                const learnedRow = await getBaselineAsync(metric_name);
                 const isBaselineActive =
                     learnedRow !== undefined &&
-                    (learnedRow.status === "active" || learnedRow.observation_count >= 10);
+                    (learnedRow.status === "active" || learnedRow.observation_count >= MIN_ACTIVE_SAMPLES);
 
                 const confidencePercent = learnedRow
                     ? Number(
-                          (
-                              Math.min(
-                                  learnedRow.observation_count / 50,
-                                  1.0
-                              ) * 100
-                          ).toFixed(2)
+                          (Math.min(learnedRow.observation_count / MIN_ACTIVE_SAMPLES, 1.0) * 100).toFixed(2)
                       )
                     : 0;
 
-                if (
-                    learnedRow &&
-                    isBaselineActive &&
-                    typeof value === "number"
-                ) {
+                if (learnedRow && isBaselineActive && typeof value === "number") {
                     const avg = learnedRow.ema_mean;
                     const rawSd = Math.sqrt(learnedRow.ema_variance);
                     const sd = Math.max(rawSd, 0.05 * Math.abs(avg), 1.0);
                     const threshold = Z_SCORE_THRESHOLDS[sens];
 
-                    let zScore: number;
-                    if (sd === 0) {
-                        zScore = value === avg ? 0 : Infinity;
-                    } else {
-                        zScore = (value - avg) / sd;
-                    }
-
+                    const zScore = sd === 0 ? (value === avg ? 0 : Infinity) : (value - avg) / sd;
                     const anomalyDetected = Math.abs(zScore) > threshold;
                     const severity = classifyNumericSeverity(zScore, sens);
 
@@ -434,9 +342,9 @@ export function detectAnomalyTool(server: McpServer): void {
                         ? `Severity is ${severity.toUpperCase()}. Investigate "${metric_name}" before proceeding. Value ${value} deviates significantly from learned baseline mean of ${avg.toFixed(4)}.`
                         : `Value is statistically consistent with learned baseline. Safe to proceed.`;
 
-                    const safeZScore = isFinite(zScore)
+                    const safeZScore = Number.isFinite(zScore)
                         ? Math.round(zScore * 10000) / 10000
-                        : (zScore > 0 ? 999999 : -999999);
+                        : (zScore > 0 ? Number.MAX_SAFE_INTEGER : -Number.MAX_SAFE_INTEGER);
 
                     if (anomalyDetected) {
                         const ctx = getTenantContext();
@@ -475,18 +383,14 @@ export function detectAnomalyTool(server: McpServer): void {
                         },
                         timestamp: new Date().toISOString(),
                     });
-
                 }
 
-                // -----------------------------------------------------------
-                // Case 3: Neither manual baseline nor active learned baseline
-                // -----------------------------------------------------------
                 const isShadowLearning = learnedRow && !isBaselineActive;
                 return buildResponse({
                     error: "BASELINE_REQUIRED",
                     metric_name,
                     message: isShadowLearning
-                        ? `Learned baseline for "${metric_name}" is in shadow mode (${learnedRow.observation_count}/50 observations collected). Need 50 samples before active enforcement or supply a manual baseline array.`
+                        ? `Learned baseline for "${metric_name}" is in shadow mode (${learnedRow.observation_count}/${MIN_ACTIVE_SAMPLES} observations collected). Need ${MIN_ACTIVE_SAMPLES} samples before active enforcement or supply a manual baseline array.`
                         : `No manual baseline provided and no active learned baseline found for metric "${metric_name}". Either provide a manual baseline array or use record_observation to train a baseline.`,
                     hint: "Use record_observation to record observations over time, or supply a baseline array directly.",
                     timestamp: new Date().toISOString(),

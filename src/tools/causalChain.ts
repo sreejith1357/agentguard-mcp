@@ -1,40 +1,33 @@
 /**
- * AgentGuard MCP v2.0.0 — Tool: Causal Chain Analysis
+ * AgentGuard MCP v3.1.2 — Tool: Causal Chain Analysis
  *
- * Reads checkpoint history from SQLite storage and uses SQLite recursive Common Table Expressions (CTEs)
- * along with BFS graph traversal to trace failure propagation through parent_checkpoint_id dependency links.
- * Identifies the root cause checkpoint and scores confidence based on how many failure chains converge on it.
+ * Reads checkpoint history from storage (SQLite recursive CTE or PostgreSQL)
+ * and uses BFS graph traversal to trace failure propagation through parent_checkpoint_id links.
+ * Supports optional bidirectional downstream impact tracing.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildResponse, buildErrorResponse } from "../utils/response.js";
-import { readAll, countRecords, getLineageForFailures } from "../utils/storage.js";
+import { readAll, countRecords, getLineageForFailuresAsync } from "../utils/storage.js";
 import type { CheckpointEntry } from "../types/index.js";
-
-// ---------------------------------------------------------------------------
-// Internal graph types
-// ---------------------------------------------------------------------------
 
 interface GraphNode {
     checkpoint: CheckpointEntry;
-    children: string[];           // checkpoint IDs whose parent = this node
+    children: string[];
 }
 
 type Graph = Map<string, GraphNode>;
 
-// ---------------------------------------------------------------------------
-// Helper: build adjacency list from checkpoint array
-// ---------------------------------------------------------------------------
+const MAX_GRAPH_NODES = 2000;
 
 function buildGraph(checkpoints: CheckpointEntry[]): {
     graph: Graph;
-    rootIds: Set<string>;   // checkpoints with no parent
+    rootIds: Set<string>;
 } {
     const graph: Graph = new Map();
     const rootIds = new Set<string>();
 
-    // First pass — create every node
     for (const cp of checkpoints) {
         graph.set(cp.id, { checkpoint: cp, children: [] });
         if (!cp.parent_checkpoint_id) {
@@ -42,7 +35,6 @@ function buildGraph(checkpoints: CheckpointEntry[]): {
         }
     }
 
-    // Second pass — wire children into their parent nodes
     for (const cp of checkpoints) {
         if (cp.parent_checkpoint_id && graph.has(cp.parent_checkpoint_id)) {
             graph.get(cp.parent_checkpoint_id)!.children.push(cp.id);
@@ -52,14 +44,9 @@ function buildGraph(checkpoints: CheckpointEntry[]): {
     return { graph, rootIds };
 }
 
-// ---------------------------------------------------------------------------
-// Helper: walk from a given node UP through parent links (BFS)
-// ---------------------------------------------------------------------------
-
 function ancestorChain(
     startId: string,
     graph: Graph,
-    rootIds: Set<string>,
     cyclesFound: Set<string>
 ): string[] {
     const chain: string[] = [];
@@ -68,7 +55,6 @@ function ancestorChain(
 
     while (current !== null) {
         if (visited.has(current)) {
-            // Circular reference detected — break the cycle
             cyclesFound.add(current);
             break;
         }
@@ -77,24 +63,41 @@ function ancestorChain(
 
         const node = graph.get(current);
         if (!node) break;
-
-        // Walk up
         current = node.checkpoint.parent_checkpoint_id ?? null;
     }
 
-    return chain;   // [startId, parentId, grandparentId, ..., rootId]
+    return chain;
 }
 
-// ---------------------------------------------------------------------------
-// Tool registration
-// ---------------------------------------------------------------------------
+function downstreamBFS(rootId: string, graph: Graph): string[] {
+    const impacted: string[] = [];
+    const visited = new Set<string>([rootId]);
+    const queue: string[] = [...(graph.get(rootId)?.children ?? [])];
+
+    while (queue.length > 0 && impacted.length < MAX_GRAPH_NODES) {
+        const currentId = queue.shift()!;
+        if (visited.has(currentId)) continue;
+        visited.add(currentId);
+        impacted.push(currentId);
+
+        const node = graph.get(currentId);
+        if (node) {
+            for (const childId of node.children) {
+                if (!visited.has(childId)) queue.push(childId);
+            }
+        }
+    }
+
+    return impacted;
+}
 
 export function causalChainTools(server: McpServer): void {
     server.registerTool(
         "analyze_causality",
         {
             description:
-                "Traces failed checkpoints through their declared dependency graph and identifies the deepest common ancestor as a root-cause candidate. Dependency is declared via parent_checkpoint_id — this traces structural dependency, not proven causation.",
+                "Traces failed checkpoints through their declared dependency graph and identifies the deepest common ancestor as a root-cause candidate. " +
+                "Dependency is declared via parent_checkpoint_id — this traces structural dependency, not proven real-world causation.",
             inputSchema: {
                 session_id: z
                     .string()
@@ -114,16 +117,19 @@ export function causalChainTools(server: McpServer): void {
                     .optional()
                     .default(false)
                     .describe(
-                        "Include full dependency graph in response for debugging. " +
-                        "Useful when building agent workflows that need to visualise the causal structure."
+                        `Include dependency graph in response for debugging (capped at ${MAX_GRAPH_NODES} nodes).`
+                    ),
+                include_downstream: z
+                    .boolean()
+                    .optional()
+                    .default(false)
+                    .describe(
+                        "Also perform downstream BFS from the root-cause candidate to list all impacted descendant checkpoints."
                     ),
             },
         },
-        async ({ session_id, failed_checkpoint_ids, include_graph }) => {
+        async ({ session_id, failed_checkpoint_ids, include_graph, include_downstream }) => {
             try {
-                // ---------------------------------------------------------------
-                // Phase 1 — Check session existence & count
-                // ---------------------------------------------------------------
                 const totalCheckpointsInSession = await countRecords(session_id);
 
                 if (totalCheckpointsInSession === 0) {
@@ -136,12 +142,19 @@ export function causalChainTools(server: McpServer): void {
                     });
                 }
 
-                // ---------------------------------------------------------------
-                // Phase 2 — Use SQLite Recursive CTE to fetch ancestor lineage
-                // ---------------------------------------------------------------
-                // For graph completeness or full tree inspection, fetch checkpoints
-                const lineageCheckpoints = getLineageForFailures(session_id, failed_checkpoint_ids);
-                const allCheckpoints = include_graph ? await readAll<CheckpointEntry>(session_id) : lineageCheckpoints;
+                const lineageCheckpoints = await getLineageForFailuresAsync(session_id, failed_checkpoint_ids);
+                let allCheckpoints = lineageCheckpoints;
+                let graphTruncated = false;
+
+                if (include_graph || include_downstream) {
+                    const full = await readAll<CheckpointEntry>(session_id);
+                    if (full.length > MAX_GRAPH_NODES) {
+                        allCheckpoints = full.slice(-MAX_GRAPH_NODES);
+                        graphTruncated = true;
+                    } else {
+                        allCheckpoints = full;
+                    }
+                }
 
                 const checkpointById = new Map<string, CheckpointEntry>(
                     allCheckpoints.map((cp) => [cp.id, cp])
@@ -161,14 +174,11 @@ export function causalChainTools(server: McpServer): void {
                 const { graph, rootIds } = buildGraph(allCheckpoints);
                 const cyclesFound = new Set<string>();
 
-                // ---------------------------------------------------------------
-                // Phase 3 — BFS upward from each failed checkpoint
-                // ---------------------------------------------------------------
                 const ancestorFrequency = new Map<string, number>();
                 const chainsPerFailure = new Map<string, string[]>();
 
                 for (const failId of knownFailIds) {
-                    const chain = ancestorChain(failId, graph, rootIds, cyclesFound);
+                    const chain = ancestorChain(failId, graph, cyclesFound);
                     chainsPerFailure.set(failId, chain);
 
                     for (const ancestorId of chain) {
@@ -179,11 +189,8 @@ export function causalChainTools(server: McpServer): void {
                     }
                 }
 
-                // ---------------------------------------------------------------
-                // Phase 4 — Identify root cause candidate & confidence
-                // ---------------------------------------------------------------
                 let rootCauseId: string | null = null;
-                let rootCauseFreq: number = 0;
+                let rootCauseFreq = 0;
 
                 for (const [id, freq] of ancestorFrequency) {
                     const isPreferred =
@@ -215,9 +222,6 @@ export function causalChainTools(server: McpServer): void {
                     ((rootCauseFreq / knownFailIds.length) * 100).toFixed(2)
                 );
 
-                // ---------------------------------------------------------------
-                // Phase 5 — Build response
-                // ---------------------------------------------------------------
                 const failureChain: string[] = [];
                 for (const [, chain] of chainsPerFailure) {
                     const ordered = [...chain].reverse();
@@ -241,7 +245,7 @@ export function causalChainTools(server: McpServer): void {
                 const summaryParts: string[] = [
                     `Root-cause candidate identified: checkpoint "${rootCauseId.slice(0, 8)}…" ` +
                     `(type: ${rootCauseCheckpoint.checkpoint_type}, ` +
-                    `confidence: ${confidenceScore}%).`,
+                    `convergence: ${confidenceScore}% across ${knownFailIds.length} failure(s)).`,
                 ];
 
                 if (distinctRoots.size > 1) {
@@ -268,13 +272,17 @@ export function causalChainTools(server: McpServer): void {
                     );
                 }
 
-                if (knownFailIds.length === 1 && isRootNode) {
+                if (knownFailIds.length === 1) {
                     summaryParts.push(
-                        "Single failure checkpoint with no parent — it is the root-cause candidate (confidence 100%)."
+                        isRootNode
+                            ? "Single failure trace with no parent — structural root of its chain (100% single-chain trace)."
+                            : "Single failure trace — supply multiple failed_checkpoint_ids for multi-branch convergence confidence."
                     );
                 }
 
-                const analysisSummary = summaryParts.join(" ");
+                const downstreamImpact = include_downstream
+                    ? downstreamBFS(rootCauseId, graph)
+                    : undefined;
 
                 let graphOutput: Record<string, unknown> | undefined;
                 if (include_graph) {
@@ -301,15 +309,20 @@ export function causalChainTools(server: McpServer): void {
                     },
                     confidence_score: confidenceScore,
                     failure_chain: failureChain,
+                    ...(downstreamImpact !== undefined && {
+                        downstream_impact_ids: downstreamImpact,
+                        downstream_impact_count: downstreamImpact.length,
+                    }),
                     total_checkpoints_analyzed: totalCheckpointsInSession,
                     failed_checkpoints_found: knownFailIds.length,
                     unknown_checkpoint_ids: unknownIds,
-                    analysis_summary: analysisSummary,
-                    dependency_note: "This analysis traces declared parent_checkpoint_id relationships. It identifies structural dependency ancestors, not proven real-world causation.",
+                    analysis_summary: summaryParts.join(" "),
+                    dependency_note:
+                        "This analysis traces declared parent_checkpoint_id relationships. It identifies structural dependency ancestors, not proven real-world causation.",
+                    ...(graphTruncated && { graph_truncated: true, max_graph_nodes: MAX_GRAPH_NODES }),
                     ...(include_graph && graphOutput !== undefined && { graph: graphOutput }),
                     timestamp: new Date().toISOString(),
                 });
-
             } catch (error) {
                 return buildErrorResponse("analyze_causality", error);
             }

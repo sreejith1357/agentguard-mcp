@@ -37,11 +37,26 @@ export interface FieldValidationResult {
     reason: string;
 }
 
+export interface SecurityScanMatch {
+    field: string;
+    category: string;
+    severity: "low" | "medium" | "high" | "critical";
+    signature: string;
+    excerpt: string;
+}
+
+export interface SecurityScanResult {
+    prompt_injection_detected: boolean;
+    risk_level: "none" | "low" | "medium" | "high" | "critical";
+    matches: SecurityScanMatch[];
+}
+
 export interface ValidationResult {
     valid: boolean;
     errors: string[];
     warnings: string[];
     field_results: Record<string, FieldValidationResult>;
+    security_scan?: SecurityScanResult;
     age_seconds?: number;
     age_check?: "passed" | "stale" | "no_timestamp";
     timestamp: string;
@@ -64,6 +79,8 @@ export interface CheckpointEntry {
     id: string;
     session_id: string;
     checkpoint_type: CheckpointType;
+    tool_name?: string;
+    status?: string;
     content: string;
     metadata?: Record<string, unknown>;
     tags?: string[];
@@ -78,7 +95,14 @@ export interface LogCheckpointResult {
     checkpoint_id: string;
     session_id: string;
     checkpoint_type: CheckpointType;
+    tool_name?: string;
+    status?: string;
     parent_checkpoint_id: string | null;
+    loop_detected: boolean;
+    loop_type?: "exact_repeat" | "oscillation" | "parameter_repetition";
+    repeat_count: number;
+    recommended_action: string;
+    warning?: string;
     timestamp: string;
 }
 
@@ -134,13 +158,18 @@ export interface AnomalyReport {
 export interface SessionHistoryResult {
     session_id: string;
     total_found: number;
+    returned_count?: number;
+    has_more?: boolean;
     entries: CheckpointEntry[];
     oldest_entry_at: string | null;
     newest_entry_at: string | null;
     filters_applied: {
         checkpoint_type?: string;
         since_timestamp?: string;
+        until_timestamp?: string;
         tags?: string[];
+        tag_match?: "all" | "any";
+        offset?: number;
         limit: number;
     };
     timestamp: string;
@@ -164,10 +193,13 @@ export interface CircuitRow {
     state: CircuitState;
     failure_count: number;
     success_count: number;
+    half_open_success_count?: number;
     last_failure_at: string | null;
     last_success_at: string | null;
     opened_at: string | null;
     half_opened_at: string | null;
+    last_error?: string | null;
+    last_response_time_ms?: number | null;
     updated_at: string;
 }
 

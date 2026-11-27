@@ -1,15 +1,15 @@
 /**
- * AgentGuard MCP v2.1.0 — Multi-Tenant Bearer Token Authentication & Identity Utility
+ * AgentGuard MCP v3.1.2 — Multi-Tenant Bearer Token Authentication & Identity Utility
  *
  * Provides constant-time Bearer token verification and resolves token identity
- * into a structured TenantIdentity ({ tenant_id, project_id, env, rate_limit }).
+ * into a structured TenantIdentity ({ tenant_id, project_id, env, rate_limit, scopes }).
  * Uses AsyncLocalStorage to inject tenant identity into async tool execution contexts.
  */
 
 import type { Request } from "express";
 import crypto from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { verifyApiKey } from "./apiKeyStore";
+import { verifyApiKey } from "./apiKeyStore.js";
 
 export interface TenantIdentity {
     tenant_id: string;
@@ -18,6 +18,7 @@ export interface TenantIdentity {
     rate_limit: number;
     plan?: string;
     monthly_quota?: number;
+    scopes?: string[];
 }
 
 export interface AuthResult {
@@ -49,9 +50,8 @@ export function getTenantContext(): TenantIdentity {
  * Supports DB hashed API keys as well as environment variable fallback keys.
  */
 export function authenticateRequest(req: Request): AuthResult {
-    const envApiKey = process.env.AGENTGUARD_API_KEY;
+    const envApiKey = process.env.AGENTGUARD_API_KEY?.trim() || "";
 
-    // Default tenant identity fallback
     const defaultIdentity: TenantIdentity = {
         tenant_id: "default-tenant",
         project_id: "default-project",
@@ -61,19 +61,27 @@ export function authenticateRequest(req: Request): AuthResult {
 
     const authHeader = req.headers["authorization"] || req.headers["Authorization"];
 
-    // Open mode — if AGENTGUARD_API_KEY is not set AND no auth header is supplied
-    if (!envApiKey && (!authHeader || typeof authHeader !== "string")) {
+    // Open mode — ONLY when AGENTGUARD_API_KEY is unset AND no Authorization header was sent
+    if (!envApiKey && (!authHeader || typeof authHeader !== "string" || authHeader.trim() === "")) {
         return { authenticated: true, identity: defaultIdentity };
     }
 
-    if (!authHeader || typeof authHeader !== "string") {
+    if (!authHeader || typeof authHeader !== "string" || authHeader.trim() === "") {
         return {
             authenticated: false,
             error: "Missing Authorization header. Use: Bearer <your-api-key>",
         };
     }
 
-    const tokenRaw = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : authHeader.trim();
+    const trimmedHeader = authHeader.trim();
+    const tokenRaw = trimmedHeader.startsWith("Bearer ") ? trimmedHeader.slice(7).trim() : trimmedHeader;
+
+    if (!tokenRaw) {
+        return {
+            authenticated: false,
+            error: "Empty Bearer token",
+        };
+    }
 
     // Check if token specifies structured tenant scoping: "tenant_id:project_id:env:key"
     let tokenKey = tokenRaw;
@@ -83,30 +91,31 @@ export function authenticateRequest(req: Request): AuthResult {
 
     const parts = tokenRaw.split(":");
     if (parts.length === 4) {
-        customTenantId = parts[0];
+        customTenantId = parts[0] || null;
         customProjectId = parts[1] || "default-project";
         customEnv = parts[2] || "production";
         tokenKey = parts[3];
     }
 
-    // 1. First check Database for hashed API keys
+    // 1. Check Database for hashed API keys (rejects revoked/expired/suspended)
     const dbKeyCtx = verifyApiKey(tokenKey);
     if (dbKeyCtx) {
         return {
             authenticated: true,
             identity: {
-                tenant_id: customTenantId || dbKeyCtx.tenant_id,
+                tenant_id: dbKeyCtx.tenant_id,
                 project_id: customProjectId,
                 env: customEnv,
                 rate_limit: dbKeyCtx.monthly_quota,
                 plan: dbKeyCtx.plan,
                 monthly_quota: dbKeyCtx.monthly_quota,
+                ...(dbKeyCtx.scopes && dbKeyCtx.scopes.length > 0 ? { scopes: dbKeyCtx.scopes } : {}),
             },
         };
     }
 
-    // 2. Fall back to AGENTGUARD_API_KEY env variable check
-    if (envApiKey && envApiKey.trim() !== "") {
+    // 2. Fall back to AGENTGUARD_API_KEY env variable check (constant-time comparison)
+    if (envApiKey !== "") {
         const tokenBuf = Buffer.from(tokenKey, "utf8");
         const keyBuf = Buffer.from(envApiKey, "utf8");
 
@@ -123,26 +132,22 @@ export function authenticateRequest(req: Request): AuthResult {
         }
     }
 
-    // 3. Open mode fallback if AGENTGUARD_API_KEY not set and no valid DB key matched
-    if (!envApiKey) {
-        return { authenticated: true, identity: defaultIdentity };
-    }
-
     return {
         authenticated: false,
-        error: "Invalid API key",
+        error: "Invalid, expired, or revoked API key",
     };
 }
 
 /**
- * Verifies if the incoming Authorization header contains a valid admin key or DB key.
- * Supports AGENTGUARD_ADMIN_KEY or AGENTGUARD_API_KEY.
+ * Verifies if the incoming Authorization header contains a valid Admin API key.
+ * Only accepts AGENTGUARD_ADMIN_KEY (or AGENTGUARD_API_KEY if AGENTGUARD_ADMIN_KEY is not configured).
+ * Regular tenant DB API keys are NEVER accepted for administrative endpoints.
  */
 export function verifyAdminKey(authHeader?: string): boolean {
-    const adminKey = process.env.AGENTGUARD_ADMIN_KEY || process.env.AGENTGUARD_API_KEY;
+    const adminKey = (process.env.AGENTGUARD_ADMIN_KEY || process.env.AGENTGUARD_API_KEY || "").trim();
 
     // If no admin key configured in environment, allow open access in dev mode
-    if (!adminKey || adminKey.trim() === "") {
+    if (adminKey === "") {
         return true;
     }
 
@@ -150,21 +155,18 @@ export function verifyAdminKey(authHeader?: string): boolean {
         return false;
     }
 
-    const tokenRaw = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : authHeader.trim();
+    const trimmed = authHeader.trim();
+    const tokenRaw = trimmed.startsWith("Bearer ") ? trimmed.slice(7).trim() : trimmed;
     const parts = tokenRaw.split(":");
     const tokenKey = parts.length === 4 ? parts[3] : tokenRaw;
 
-    // Check environment admin key using constant-time comparison
+    if (!tokenKey) return false;
+
     const tokenBuf = Buffer.from(tokenKey, "utf8");
-    const keyBuf = Buffer.from(adminKey.trim(), "utf8");
+    const keyBuf = Buffer.from(adminKey, "utf8");
     if (tokenBuf.length === keyBuf.length && crypto.timingSafeEqual(tokenBuf, keyBuf)) {
         return true;
     }
 
-    // Check DB key
-    const dbKeyCtx = verifyApiKey(tokenKey);
-    if (dbKeyCtx) return true;
-
     return false;
 }
-

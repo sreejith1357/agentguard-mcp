@@ -41,7 +41,8 @@ export class RepositoryFactory {
         this.backend = envBackend === "postgres" ? "postgres" : "sqlite";
 
         if (this.backend === "postgres") {
-            this.pgPool = new PostgresConnectionPool(process.env.POSTGRES_URL);
+            const pgUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+            this.pgPool = new PostgresConnectionPool(pgUrl);
             this.pgPool.connect().catch((err) => console.error("[AgentGuard] PostgreSQL connect error:", err));
 
             this.cbRepo = new PostgresCircuitBreakerRepository(this.pgPool);
@@ -68,7 +69,8 @@ export class RepositoryFactory {
         this.backend = type;
         if (type === "postgres") {
             if (!this.pgPool) {
-                this.pgPool = new PostgresConnectionPool(process.env.POSTGRES_URL);
+                const pgUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+                this.pgPool = new PostgresConnectionPool(pgUrl);
                 this.pgPool.connect().catch(() => {});
             }
             this.cbRepo = new PostgresCircuitBreakerRepository(this.pgPool);

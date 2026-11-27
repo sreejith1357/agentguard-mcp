@@ -1,11 +1,12 @@
 /**
- * AgentGuard MCP v3.1.0 — Call Logger & Usage Analytics Utility
+ * AgentGuard MCP v3.1.2 — Call Logger, Usage Analytics & Prometheus Metrics Utility
  *
- * Provides synchronous call logging to SQLite call_logs table and
- * analytics aggregation for tenant usage monitoring.
+ * Provides synchronous call logging to SQLite `call_logs` table, percentile latency
+ * analytics (P50/P95/P99), and Prometheus exposition metrics.
  */
 
 import db from "../db/schema.js";
+import { incrementMonthlyCountCache } from "./rateLimiter.js";
 
 export interface LogCallParams {
     tenant_id: string;
@@ -25,6 +26,9 @@ export interface UsageStats {
     failed_calls: number;
     calls_by_tool: { tool_name: string; count: number }[];
     avg_response_time_ms: number;
+    p50_response_time_ms: number;
+    p95_response_time_ms: number;
+    p99_response_time_ms: number;
     error_codes: { code: string; count: number }[];
     daily_breakdown: { date: string; count: number }[];
     first_call_at: string | null;
@@ -39,9 +43,14 @@ const stmtInsertCall = db.prepare(`
     )
 `);
 
+function percentile(sorted: number[], p: number): number {
+    if (sorted.length === 0) return 0;
+    const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+    return Number(sorted[idx].toFixed(2));
+}
+
 /**
- * Synchronously log a tool execution call into SQLite.
- * Wrapped in try-catch to guarantee call logging never crashes tool execution.
+ * Synchronously log a tool execution call into SQLite and bump monthly quota cache.
  */
 export function logCall(params: LogCallParams): void {
     try {
@@ -59,13 +68,15 @@ export function logCall(params: LogCallParams): void {
             now,
             month_key
         );
+
+        incrementMonthlyCountCache(params.tenant_id, month_key);
     } catch (error) {
         console.error("[AgentGuard] Call logging error:", error);
     }
 }
 
 /**
- * Retrieve usage analytics for a specific tenant and month.
+ * Retrieve usage analytics for a specific tenant and month including latency percentiles.
  */
 export function getUsageStats(
     tenant_id: string,
@@ -136,6 +147,18 @@ export function getUsageStats(
             )
             .all(...params) as { date: string; count: number }[];
 
+        const latencyRows = db
+            .prepare(
+                `
+            SELECT response_time_ms
+            FROM call_logs
+            ${whereClause} AND response_time_ms IS NOT NULL
+            ORDER BY response_time_ms ASC
+        `
+            )
+            .all(...params) as { response_time_ms: number }[];
+        const latencies = latencyRows.map((r) => r.response_time_ms);
+
         const total_calls = summaryRow?.total_calls || 0;
         const successful_calls = summaryRow?.successful_calls || 0;
         const failed_calls = summaryRow?.failed_calls || 0;
@@ -151,6 +174,9 @@ export function getUsageStats(
             failed_calls,
             calls_by_tool,
             avg_response_time_ms,
+            p50_response_time_ms: percentile(latencies, 50),
+            p95_response_time_ms: percentile(latencies, 95),
+            p99_response_time_ms: percentile(latencies, 99),
             error_codes,
             daily_breakdown,
             first_call_at: summaryRow?.first_call_at || null,
@@ -166,6 +192,9 @@ export function getUsageStats(
             failed_calls: 0,
             calls_by_tool: [],
             avg_response_time_ms: 0,
+            p50_response_time_ms: 0,
+            p95_response_time_ms: 0,
+            p99_response_time_ms: 0,
             error_codes: [],
             daily_breakdown: [],
             first_call_at: null,
@@ -174,9 +203,6 @@ export function getUsageStats(
     }
 }
 
-/**
- * Retrieve total calls across all tenants for admin view.
- */
 export function getAllTenantsStats(
     month_key?: string
 ): { tenant_id: string; total_calls: number }[] {
@@ -200,9 +226,6 @@ export function getAllTenantsStats(
     }
 }
 
-/**
- * Retrieve aggregate monthly usage summary for health endpoint.
- */
 export function getMonthlyUsageSummary(month_key?: string): {
     total_calls_this_month: number;
     active_tenants_this_month: number;
@@ -236,4 +259,43 @@ export function getMonthlyUsageSummary(month_key?: string): {
             active_tenants_this_month: 0,
         };
     }
+}
+
+/**
+ * Formats Prometheus text exposition format (version 0.0.4) metrics.
+ */
+export function getPrometheusMetrics(uptimeSeconds: number): string {
+    const stats = getUsageStats("all");
+    const lines: string[] = [
+        "# HELP agentguard_uptime_seconds Process uptime in seconds",
+        "# TYPE agentguard_uptime_seconds gauge",
+        `agentguard_uptime_seconds ${uptimeSeconds}`,
+        "# HELP agentguard_mcp_calls_total Total MCP tool calls for current month",
+        "# TYPE agentguard_mcp_calls_total counter",
+        `agentguard_mcp_calls_total{status="success"} ${stats.successful_calls}`,
+        `agentguard_mcp_calls_total{status="error"} ${stats.failed_calls}`,
+        "# HELP agentguard_mcp_response_time_ms Tool call response latency in milliseconds",
+        "# TYPE agentguard_mcp_response_time_ms gauge",
+        `agentguard_mcp_response_time_ms{quantile="0.5"} ${stats.p50_response_time_ms}`,
+        `agentguard_mcp_response_time_ms{quantile="0.95"} ${stats.p95_response_time_ms}`,
+        `agentguard_mcp_response_time_ms{quantile="0.99"} ${stats.p99_response_time_ms}`,
+    ];
+
+    for (const t of stats.calls_by_tool) {
+        const safeTool = t.tool_name.replace(/[^a-zA-Z0-9_]/g, "_");
+        lines.push(`agentguard_mcp_tool_calls_total{tool="${safeTool}"} ${t.count}`);
+    }
+
+    try {
+        const circuitCounts = db
+            .prepare("SELECT state, COUNT(*) as cnt FROM circuit_breakers GROUP BY state")
+            .all() as { state: string; cnt: number }[];
+        lines.push("# HELP agentguard_circuits_total Number of tracked circuits by state");
+        lines.push("# TYPE agentguard_circuits_total gauge");
+        for (const row of circuitCounts) {
+            lines.push(`agentguard_circuits_total{state="${row.state}"} ${row.cnt}`);
+        }
+    } catch { /* ignore */ }
+
+    return lines.join("\n") + "\n";
 }

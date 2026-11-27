@@ -1,49 +1,36 @@
 /**
- * AgentGuard MCP v2.0.0 — Tool: Circuit Breaker
+ * AgentGuard MCP v3.1.2 — Tool: Circuit Breaker
  *
- * Implements a persistent, SQLite-backed circuit breaker for AI agents.
- * Agents call report_tool_result after every tool call to track failures.
- * The circuit automatically opens after consecutive failures, preventing
- * cascading failures downstream.
- *
- * State machine:
- *   CLOSED     — normal operation; failures are counted
- *   OPEN       — tool is failing; calls should be skipped
- *   HALF_OPEN  — cooldown elapsed; one test call allowed
- *
- * Thresholds (adjust via constants below):
- *   FAILURE_THRESHOLD = 5   consecutive failures before CLOSED → OPEN
- *   COOLDOWN_SECONDS  = 60  seconds before OPEN → HALF_OPEN auto-transition
- *   SUCCESS_THRESHOLD = 1   successes in HALF_OPEN before → CLOSED
+ * Implements a persistent circuit breaker for AI agents across SQLite & PostgreSQL.
+ * Thresholds are dynamically configurable via environment variables:
+ *   CIRCUIT_FAILURE_THRESHOLD          (default: 5)
+ *   CIRCUIT_COOLDOWN_SECONDS           (default: 60)
+ *   CIRCUIT_SUCCESS_THRESHOLD          (default: 1)
+ *   CIRCUIT_HALF_OPEN_TIMEOUT_SECONDS  (default: 120)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildResponse, buildErrorResponse } from "../utils/response.js";
-import {
-    getCircuit,
-    upsertCircuit,
-    deleteCircuit,
-} from "../utils/circuitStore.js";
+import { getCircuitAsync, upsertCircuitAsync } from "../utils/circuitStore.js";
+import { parseEnvInt } from "../utils/validation.js";
 import type { CircuitState } from "../types/index.js";
 import { getTenantContext } from "../utils/auth.js";
 import { dispatchWebhookEvent } from "../utils/webhookDispatcher.js";
 
+export function getCircuitThresholds() {
+    return {
+        FAILURE_THRESHOLD: parseEnvInt("CIRCUIT_FAILURE_THRESHOLD", 5, 1, 1000),
+        COOLDOWN_SECONDS: parseEnvInt("CIRCUIT_COOLDOWN_SECONDS", 60, 1, 86400),
+        SUCCESS_THRESHOLD: parseEnvInt("CIRCUIT_SUCCESS_THRESHOLD", 1, 1, 100),
+        HALF_OPEN_TIMEOUT_SECONDS: parseEnvInt("CIRCUIT_HALF_OPEN_TIMEOUT_SECONDS", 120, 5, 86400),
+    };
+}
 
-// ---------------------------------------------------------------------------
-// State machine constants
-// ---------------------------------------------------------------------------
-
-const FAILURE_THRESHOLD = 5;  // consecutive failures before CLOSED → OPEN
-const COOLDOWN_SECONDS  = 60; // seconds to wait before OPEN → HALF_OPEN
-const SUCCESS_THRESHOLD = 1;  // successes in HALF_OPEN before → CLOSED
-
-// ---------------------------------------------------------------------------
-// Tool registration
-// ---------------------------------------------------------------------------
+const SQL_INJECTION_PATTERN =
+    /DROP\s+TABLE|DELETE\s+FROM|UNION\s+SELECT|ALTER\s+TABLE|TRUNCATE|INSERT\s+INTO|UPDATE\s+\w+\s+SET|EXEC(?:\s|\()|xp_cmdshell|;\s*--/i;
 
 export function circuitBreakerTools(server: McpServer): void {
-
     // -----------------------------------------------------------------------
     // TOOL 1: report_tool_result
     // -----------------------------------------------------------------------
@@ -62,7 +49,7 @@ export function circuitBreakerTools(server: McpServer): void {
                     .min(1)
                     .max(128)
                     .describe(
-                        "Unique identifier for this circuit. For multi-tenant deployments use a namespaced format: 'tenant/environment/tool_name' (e.g. 'acme/prod/payment_api'). Without namespacing, circuit state is shared globally across all callers."
+                        "Unique identifier for this circuit. For multi-tenant deployments use a namespaced format: 'tenant/environment/tool_name' (e.g. 'acme/prod/payment_api')."
                     ),
                 success: z
                     .boolean()
@@ -81,24 +68,28 @@ export function circuitBreakerTools(server: McpServer): void {
                     .min(0)
                     .optional()
                     .describe(
-                        "How long the call took in milliseconds. Informational — not used in state transitions."
+                        "How long the call took in milliseconds. Persisted as latest latency telemetry."
                     ),
             },
         },
         async ({ tool_name, success, error_message, response_time_ms }) => {
             try {
+                const { FAILURE_THRESHOLD, COOLDOWN_SECONDS, SUCCESS_THRESHOLD } = getCircuitThresholds();
                 const now = new Date().toISOString();
 
-                // Load current state (or initialise to CLOSED defaults)
-                const existing = getCircuit(tool_name);
+                const existing = await getCircuitAsync(tool_name);
                 const previousState: CircuitState = existing?.state ?? "CLOSED";
-                let currentState: CircuitState   = previousState;
+                let currentState: CircuitState = previousState;
                 let failure_count = existing?.failure_count ?? 0;
                 let success_count = existing?.success_count ?? 0;
-                let opened_at     = existing?.opened_at ?? null;
+                let half_open_success_count = existing?.half_open_success_count ?? 0;
+                let opened_at = existing?.opened_at ?? null;
                 let half_opened_at = existing?.half_opened_at ?? null;
                 let last_failure_at = existing?.last_failure_at ?? null;
                 let last_success_at = existing?.last_success_at ?? null;
+                let last_error = existing?.last_error ?? null;
+                const last_response_time_ms =
+                    response_time_ms !== undefined ? response_time_ms : (existing?.last_response_time_ms ?? null);
                 let action_taken: string;
 
                 if (success) {
@@ -106,54 +97,64 @@ export function circuitBreakerTools(server: McpServer): void {
                     last_success_at = now;
 
                     if (currentState === "HALF_OPEN") {
-                        // One success in HALF_OPEN → fully CLOSED
-                        currentState  = "CLOSED";
-                        failure_count = 0;
-                        opened_at     = null;
-                        half_opened_at = null;
-                        action_taken  = "circuit_closed";
+                        half_open_success_count += 1;
+                        if (half_open_success_count >= SUCCESS_THRESHOLD) {
+                            currentState = "CLOSED";
+                            failure_count = 0;
+                            half_open_success_count = 0;
+                            opened_at = null;
+                            half_opened_at = null;
+                            last_error = null;
+                            action_taken = "circuit_closed";
+                        } else {
+                            action_taken = "half_open_probe_recorded";
+                        }
                     } else {
-                        // CLOSED success — reset consecutive failure streak
                         if (currentState === "CLOSED") {
                             failure_count = 0;
                         }
                         action_taken = currentState === "OPEN" ? "recorded_success_ignored" : "recorded_success";
                     }
                 } else {
-                    // Failure path
-                    failure_count  += 1;
+                    failure_count += 1;
                     last_failure_at = now;
+                    if (error_message !== undefined) {
+                        last_error = error_message;
+                    }
 
-                    const isSqlInjectionPattern = /DROP\s+TABLE|DELETE\s+FROM|UNION\s+SELECT|ALTER\s+TABLE|TRUNCATE/i.test(tool_name);
-                    if (isSqlInjectionPattern) {
+                    if (SQL_INJECTION_PATTERN.test(tool_name)) {
                         failure_count = 1;
                         currentState = "CLOSED";
+                        half_open_success_count = 0;
                         opened_at = null;
                         action_taken = "recorded_failure";
                     } else if (currentState === "HALF_OPEN") {
-                        // Any failure in HALF_OPEN → reopen the circuit
-                        currentState   = "OPEN";
-                        opened_at      = now;
-                        half_opened_at = null;
-                        action_taken   = "circuit_reopened";
-                    } else if (currentState === "CLOSED" && failure_count >= FAILURE_THRESHOLD) {
-                        // Hit the threshold → trip open
                         currentState = "OPEN";
-                        opened_at    = now;
+                        half_open_success_count = 0;
+                        opened_at = now;
+                        half_opened_at = null;
+                        action_taken = "circuit_reopened";
+                    } else if (currentState === "CLOSED" && failure_count >= FAILURE_THRESHOLD) {
+                        currentState = "OPEN";
+                        half_open_success_count = 0;
+                        opened_at = now;
                         action_taken = "circuit_opened";
                     } else {
                         action_taken = "recorded_failure";
                     }
                 }
 
-                upsertCircuit(tool_name, {
-                    state:          currentState,
+                await upsertCircuitAsync(tool_name, {
+                    state: currentState,
                     failure_count,
                     success_count,
+                    half_open_success_count,
                     last_failure_at,
                     last_success_at,
                     opened_at,
                     half_opened_at,
+                    last_error,
+                    last_response_time_ms,
                 });
 
                 if (currentState === "OPEN" && previousState !== "OPEN") {
@@ -170,19 +171,18 @@ export function circuitBreakerTools(server: McpServer): void {
                     });
                 }
 
-
                 return buildResponse({
                     tool_name,
                     success,
-                    previous_state:    previousState,
-                    current_state:     currentState,
+                    previous_state: previousState,
+                    current_state: currentState,
                     failure_count,
                     success_count,
                     action_taken,
-                    ...(error_message    !== undefined && { error_message }),
+                    ...(error_message !== undefined && { error_message }),
                     ...(response_time_ms !== undefined && { response_time_ms }),
-                    failure_threshold:  FAILURE_THRESHOLD,
-                    cooldown_seconds:   COOLDOWN_SECONDS,
+                    failure_threshold: FAILURE_THRESHOLD,
+                    cooldown_seconds: COOLDOWN_SECONDS,
                     timestamp: now,
                 });
             } catch (error) {
@@ -207,84 +207,95 @@ export function circuitBreakerTools(server: McpServer): void {
                     .string()
                     .min(1)
                     .max(128)
-                    .describe(
-                        "Unique identifier for this circuit. For multi-tenant deployments use a namespaced format: 'tenant/environment/tool_name' (e.g. 'acme/prod/payment_api'). Without namespacing, circuit state is shared globally across all callers."
-                    ),
+                    .describe("Unique identifier for this circuit."),
                 check_cooldown: z
                     .boolean()
                     .optional()
                     .default(true)
                     .describe(
-                        "When true (default), automatically transitions OPEN → HALF_OPEN if the cooldown period has elapsed."
+                        "When true (default), automatically transitions OPEN → HALF_OPEN if the cooldown period has elapsed, and recovers stale HALF_OPEN probes."
                     ),
             },
         },
         async ({ tool_name, check_cooldown }) => {
             try {
-                const now       = new Date().toISOString();
-                const nowMs     = Date.now();
-                let circuit = getCircuit(tool_name);
+                const { FAILURE_THRESHOLD, COOLDOWN_SECONDS, HALF_OPEN_TIMEOUT_SECONDS } = getCircuitThresholds();
+                const now = new Date().toISOString();
+                const nowMs = Date.now();
+                let circuit = await getCircuitAsync(tool_name);
 
-                // No record at all — report pristine CLOSED
                 if (!circuit) {
                     return buildResponse({
                         tool_name,
-                        state:          "CLOSED" as CircuitState,
-                        failure_count:  0,
-                        success_count:  0,
+                        state: "CLOSED" as CircuitState,
+                        failure_count: 0,
+                        success_count: 0,
                         last_failure_at: null,
                         last_success_at: null,
-                        opened_at:      null,
+                        opened_at: null,
                         half_opened_at: null,
+                        failure_threshold: FAILURE_THRESHOLD,
+                        cooldown_seconds: COOLDOWN_SECONDS,
                         recommendation: "✅ Circuit is healthy — proceed normally",
-                        message:        "No failures recorded for this tool.",
+                        message: "No failures recorded for this tool.",
                         timestamp: now,
                     });
                 }
 
                 // Auto-transition OPEN → HALF_OPEN if cooldown has elapsed
                 if (check_cooldown && circuit.state === "OPEN" && circuit.opened_at) {
-                    const elapsedSeconds =
-                        (nowMs - new Date(circuit.opened_at).getTime()) / 1000;
-
+                    const elapsedSeconds = (nowMs - new Date(circuit.opened_at).getTime()) / 1000;
                     if (elapsedSeconds >= COOLDOWN_SECONDS) {
-                        upsertCircuit(tool_name, {
-                            state:          "HALF_OPEN",
+                        await upsertCircuitAsync(tool_name, {
+                            state: "HALF_OPEN",
                             half_opened_at: now,
+                            half_open_success_count: 0,
                         });
-                        circuit = getCircuit(tool_name)!;
+                        circuit = (await getCircuitAsync(tool_name))!;
+                    }
+                } else if (check_cooldown && circuit.state === "HALF_OPEN" && circuit.half_opened_at) {
+                    // Recover stale HALF_OPEN probes that were never reported back
+                    const halfOpenElapsed = (nowMs - new Date(circuit.half_opened_at).getTime()) / 1000;
+                    if (halfOpenElapsed >= HALF_OPEN_TIMEOUT_SECONDS) {
+                        await upsertCircuitAsync(tool_name, {
+                            state: "OPEN",
+                            opened_at: now,
+                            half_opened_at: null,
+                            half_open_success_count: 0,
+                        });
+                        circuit = (await getCircuitAsync(tool_name))!;
                     }
                 }
 
-                // Calculate seconds remaining until HALF_OPEN (only for OPEN circuits)
                 let seconds_until_half_open: number | undefined;
                 if (circuit.state === "OPEN" && circuit.opened_at) {
-                    const elapsedSeconds =
-                        (nowMs - new Date(circuit.opened_at).getTime()) / 1000;
-                    const remaining = Math.ceil(COOLDOWN_SECONDS - elapsedSeconds);
-                    seconds_until_half_open = Math.max(0, remaining);
+                    const elapsedSeconds = (nowMs - new Date(circuit.opened_at).getTime()) / 1000;
+                    seconds_until_half_open = Math.max(0, Math.ceil(COOLDOWN_SECONDS - elapsedSeconds));
                 }
 
-                // State-based recommendation
                 const recommendations: Record<CircuitState, string> = {
-                    CLOSED:    "✅ Circuit is healthy — proceed normally",
-                    OPEN:      "🔴 Circuit is OPEN — do not call this tool",
+                    CLOSED: "✅ Circuit is healthy — proceed normally",
+                    OPEN: "🔴 Circuit is OPEN — do not call this tool",
                     HALF_OPEN: "🟡 Circuit is testing — call once and report result",
                 };
 
                 return buildResponse({
                     tool_name,
-                    state:           circuit.state,
-                    failure_count:   circuit.failure_count,
-                    success_count:   circuit.success_count,
+                    state: circuit.state,
+                    failure_count: circuit.failure_count,
+                    success_count: circuit.success_count,
                     last_failure_at: circuit.last_failure_at,
                     last_success_at: circuit.last_success_at,
-                    opened_at:       circuit.opened_at,
-                    half_opened_at:  circuit.half_opened_at,
+                    opened_at: circuit.opened_at,
+                    half_opened_at: circuit.half_opened_at,
+                    ...(circuit.last_error ? { last_error: circuit.last_error } : {}),
+                    ...(circuit.last_response_time_ms !== null && circuit.last_response_time_ms !== undefined
+                        ? { last_response_time_ms: circuit.last_response_time_ms }
+                        : {}),
                     ...(seconds_until_half_open !== undefined && { seconds_until_half_open }),
-                    failure_threshold:  FAILURE_THRESHOLD,
-                    cooldown_seconds:   COOLDOWN_SECONDS,
-                    recommendation:  recommendations[circuit.state],
+                    failure_threshold: FAILURE_THRESHOLD,
+                    cooldown_seconds: COOLDOWN_SECONDS,
+                    recommendation: recommendations[circuit.state],
                     timestamp: now,
                 });
             } catch (error) {
@@ -309,9 +320,7 @@ export function circuitBreakerTools(server: McpServer): void {
                     .string()
                     .min(1)
                     .max(128)
-                    .describe(
-                        "Unique identifier for this circuit. For multi-tenant deployments use a namespaced format: 'tenant/environment/tool_name' (e.g. 'acme/prod/payment_api'). Without namespacing, circuit state is shared globally across all callers."
-                    ),
+                    .describe("Unique identifier for this circuit."),
                 reason: z
                     .string()
                     .max(500)
@@ -319,17 +328,22 @@ export function circuitBreakerTools(server: McpServer): void {
                     .describe(
                         "Optional explanation of why the circuit is being manually reset — recorded for audit purposes."
                     ),
+                reset_counters: z
+                    .boolean()
+                    .optional()
+                    .default(false)
+                    .describe("If true, also clears historical success_count to 0 (default: false, preserves success history)."),
             },
         },
-        async ({ tool_name, reason }) => {
+        async ({ tool_name, reason, reset_counters }) => {
             try {
-                const now     = new Date().toISOString();
-                const circuit = getCircuit(tool_name);
+                const now = new Date().toISOString();
+                const circuit = await getCircuitAsync(tool_name);
 
                 if (!circuit) {
                     return buildResponse({
                         tool_name,
-                        reset:   false,
+                        reset: false,
                         message: `No circuit found for "${tool_name}" — nothing to reset.`,
                         timestamp: now,
                     });
@@ -337,19 +351,22 @@ export function circuitBreakerTools(server: McpServer): void {
 
                 const previousState = circuit.state;
 
-                upsertCircuit(tool_name, {
-                    state:          "CLOSED",
-                    failure_count:  0,
-                    success_count:  0,
-                    opened_at:      null,
+                await upsertCircuitAsync(tool_name, {
+                    state: "CLOSED",
+                    failure_count: 0,
+                    half_open_success_count: 0,
+                    ...(reset_counters ? { success_count: 0 } : {}),
+                    opened_at: null,
                     half_opened_at: null,
+                    last_error: null,
                 });
 
                 return buildResponse({
                     tool_name,
-                    reset:          true,
+                    reset: true,
                     previous_state: previousState,
-                    current_state:  "CLOSED" as CircuitState,
+                    current_state: "CLOSED" as CircuitState,
+                    success_count_preserved: reset_counters ? 0 : circuit.success_count,
                     ...(reason !== undefined && { reason }),
                     reset_at: now,
                 });

@@ -34,20 +34,21 @@
     "dist",
     "public",
     "README.md",
+    "LICENSE",
     "smithery.yaml",
     "glama.json",
-    "mcp.json"
+    "mcp.json",
+    "server.json"
   ],
   "scripts": {
     "dev": "npx tsx src/index.ts",
+    "dev:stdio": "npx tsx src/index.ts --stdio",
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:stdio": "node dist/index.js --stdio",
     "benchmark": "node load-test/benchmark.mjs",
-    "test": "node --import tsx --test --test-concurrency=1 tests/**/*.test.ts"
+    "test": "AGENTGUARD_DB_PATH=/tmp/agentguard-test.db node --import tsx --test --test-concurrency=1 tests/**/*.test.ts"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "type": "commonjs",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -58,6 +59,7 @@
     "express-rate-limit": "^8.7.0",
     "helmet": "^8.3.0",
     "morgan": "^1.12.1",
+    "pg": "^8.16.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -66,6 +68,7 @@
     "@types/express": "^5.0.6",
     "@types/morgan": "^1.9.10",
     "@types/node": "^22.20.3",
+    "@types/pg": "^8.15.6",
     "autocannon": "^8.0.0",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2"

@@ -59,10 +59,14 @@ const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
 const BLOCKED_HOSTNAMES = new Set([
     "localhost",
     "metadata.google.internal",
+    "metadata.internal",
     "metadata",
     "ip6-localhost",
     "ip6-loopback",
     "localhost.localdomain",
+    "kube-apiserver",
+    "kubernetes.default.svc",
+    "kubernetes.default",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -237,8 +241,9 @@ function checkIPv4Octets(octets: number[]): BlockedCategory | null {
         return "ipv4_private";
     }
 
-    // Link-local / APIPA / Cloud Instance Metadata (169.254.0.0/16)
+    // Link-local / APIPA / Cloud Instance Metadata (169.254.0.0/16) and Azure Wire Server (168.63.129.16)
     if (a === 169 && b === 254) return "ipv4_link_local";
+    if (a === 168 && b === 63 && c === 129 && octets[3] === 16) return "ipv4_link_local";
 
     // CGNAT (100.64.0.0/10)
     if (a === 100 && b >= 64 && b <= 127) return "ipv4_cgnat";
@@ -377,15 +382,19 @@ export function createSSRFSafeAgents(options: { allowLoopback?: boolean } = {}):
 export interface SSRFRequestOptions {
     method?: string;
     headers?: Record<string, string>;
+    body?: string | Buffer;
     timeoutMs?: number;
     maxRedirects?: number;
     allowLoopback?: boolean;
+    captureBody?: boolean;
+    maxBodyBytes?: number;
 }
 
 export interface SSRFResponse {
     status: number;
     statusText: string;
     headers: Record<string, string>;
+    body?: string;
     url: string;
     responseTimeMs: number;
     redirectsFollowed: number;
@@ -402,9 +411,12 @@ export async function executeSSRFRequest(
     const {
         method = "GET",
         headers = {},
+        body,
         timeoutMs = 5000,
         maxRedirects = 5,
         allowLoopback = false,
+        captureBody = false,
+        maxBodyBytes = 65536,
     } = options;
 
     let currentUrlStr = targetUrlStr;
@@ -433,14 +445,17 @@ export async function executeSSRFRequest(
             const pinnedIp = validatedIps[0] || parsed.hostname;
 
             // 2. Format request options for IP Pinning
-            const isIPv6 = net.isIPv6(pinnedIp);
             const hostHeader = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
 
             const reqHeaders: Record<string, string> = {
-                "User-Agent": "AgentGuard-SSRFGuard/2.1",
+                "User-Agent": "AgentGuard-SSRFGuard/3.1",
                 ...headers,
                 Host: hostHeader,
             };
+
+            if (body !== undefined && reqHeaders["Content-Length"] === undefined && reqHeaders["content-length"] === undefined) {
+                reqHeaders["Content-Length"] = String(Buffer.byteLength(body));
+            }
 
             const client = isHttps ? https : http;
             const agent = isHttps ? agents.httpsAgent : agents.httpAgent;
@@ -464,6 +479,7 @@ export async function executeSSRFRequest(
                 status: number;
                 statusText: string;
                 headers: Record<string, string>;
+                body?: string;
                 location?: string;
             }>((resolve, reject) => {
                 const req = client.request(requestOptions, (res) => {
@@ -471,13 +487,40 @@ export async function executeSSRFRequest(
                     for (const [k, v] of Object.entries(res.headers)) {
                         if (v) resHeaders[k.toLowerCase()] = Array.isArray(v) ? v.join(", ") : v;
                     }
-                    resolve({
-                        status: res.statusCode || 0,
-                        statusText: res.statusMessage || "",
-                        headers: resHeaders,
-                        location: resHeaders["location"],
+
+                    const status = res.statusCode || 0;
+                    const isRedirect = status >= 300 && status < 400 && Boolean(resHeaders["location"]);
+
+                    if (!captureBody || isRedirect) {
+                        resolve({
+                            status,
+                            statusText: res.statusMessage || "",
+                            headers: resHeaders,
+                            location: resHeaders["location"],
+                        });
+                        res.resume(); // Discard body
+                        return;
+                    }
+
+                    const chunks: Buffer[] = [];
+                    let totalBytes = 0;
+                    res.on("data", (chunk: Buffer) => {
+                        if (totalBytes < maxBodyBytes) {
+                            const remaining = maxBodyBytes - totalBytes;
+                            chunks.push(chunk.subarray(0, remaining));
+                            totalBytes += chunk.length;
+                        }
                     });
-                    res.resume(); // Discard body for health check
+                    res.on("end", () => {
+                        resolve({
+                            status,
+                            statusText: res.statusMessage || "",
+                            headers: resHeaders,
+                            body: Buffer.concat(chunks).toString("utf8"),
+                            location: resHeaders["location"],
+                        });
+                    });
+                    res.on("error", (err) => reject(err));
                 });
 
                 req.on("error", (err) => reject(err));
@@ -486,12 +529,15 @@ export async function executeSSRFRequest(
                     reject(new Error(`TIMEOUT: Request timed out after ${timeoutMs}ms`));
                 });
 
+                if (body !== undefined) {
+                    req.write(body);
+                }
                 req.end();
             });
 
             const elapsed = Date.now() - startTime;
 
-            // 4. Handle Redirects Manually
+            // 4. Handle Redirects Manually (Note: only follow redirects for GET/HEAD or 307/308 safely)
             if (response.status >= 300 && response.status < 400 && response.location) {
                 if (redirectCount >= maxRedirects) {
                     throw new Error(`TOO_MANY_REDIRECTS: Exceeded max redirects (${maxRedirects})`);
@@ -507,6 +553,7 @@ export async function executeSSRFRequest(
                 status: response.status,
                 statusText: response.statusText,
                 headers: response.headers,
+                ...(captureBody && response.body !== undefined ? { body: response.body } : {}),
                 url: currentUrlStr,
                 responseTimeMs: elapsed,
                 redirectsFollowed: redirectCount,

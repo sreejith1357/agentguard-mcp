@@ -6,6 +6,7 @@
  */
 
 import type { CheckpointEntry } from "../types/index.js";
+import type { QueryHistoryOptions, QueryHistoryResult } from "../repositories/interfaces.js";
 import { getCausalTraceRepository } from "../repositories/factory.js";
 import db from "../db/schema.js";
 
@@ -52,23 +53,22 @@ export async function readAll<T = CheckpointEntry>(
 }
 
 /**
- * Filtered query for session history directly using database indexes scoped by tenant context.
+ * Filtered query for session history directly using database indexes scoped by tenant context (sync SQLite fast-path).
  */
-export function querySessionHistory(options: {
-    session_id: string;
-    limit?: number;
-    checkpoint_type?: string;
-    since_timestamp?: string;
-    tags?: string[];
-    tenant_id?: string;
-    project_id?: string;
-}): { entries: CheckpointEntry[]; totalFound: number } {
+export function querySessionHistory(options: QueryHistoryOptions): QueryHistoryResult {
     const res = getCausalTraceRepository().queryHistory(options);
-    return res instanceof Promise ? { entries: [], totalFound: 0 } : res;
+    return res instanceof Promise ? { entries: [], totalFound: 0, hasMore: false } : res;
 }
 
 /**
- * Traces failure lineage recursively using a Common Table Expression (CTE) scoped by tenant.
+ * Async-safe filtered query across both SQLite and PostgreSQL backends.
+ */
+export async function querySessionHistoryAsync(options: QueryHistoryOptions): Promise<QueryHistoryResult> {
+    return await getCausalTraceRepository().queryHistory(options);
+}
+
+/**
+ * Traces failure lineage recursively using a Common Table Expression (CTE) scoped by tenant (sync SQLite fast-path).
  */
 export function getLineageForFailures(
     sessionId: string,
@@ -78,6 +78,18 @@ export function getLineageForFailures(
 ): CheckpointEntry[] {
     const res = getCausalTraceRepository().getLineageForFailures(sessionId, failedCheckpointIds, tenantId, projectId);
     return res instanceof Promise ? [] : res;
+}
+
+/**
+ * Async-safe failure lineage across both SQLite and PostgreSQL backends.
+ */
+export async function getLineageForFailuresAsync(
+    sessionId: string,
+    failedCheckpointIds: string[],
+    tenantId?: string,
+    projectId?: string
+): Promise<CheckpointEntry[]> {
+    return await getCausalTraceRepository().getLineageForFailures(sessionId, failedCheckpointIds, tenantId, projectId);
 }
 
 /**

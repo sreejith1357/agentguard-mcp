@@ -18,3 +18,10 @@ agentguard_audit_*.txt
 # Scratch and demo scripts
 live_demo.js
 scratch/
+
+# Python build & cache artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+sdk/python/dist/
+sdk/python/build/

@@ -1,12 +1,11 @@
 /**
- * AgentGuard MCP v3.1.0 — Admin Audit Logger Utility
+ * AgentGuard MCP v3.1.2 — Admin Audit Logger Utility
  *
- * Provides persistent SQLite audit trail logging for all administrative actions
- * including tenant creation, plan updates, key generation/revocation, circuit resets,
- * and webhook updates.
+ * Provides persistent SQLite audit trail logging for administrative actions
+ * with filterable querying (action, tenant_id, since, limit).
  */
 
-import crypto from "crypto";
+import crypto from "node:crypto";
 import db from "../db/schema.js";
 
 export interface AuditLogRecord {
@@ -19,7 +18,7 @@ export interface AuditLogRecord {
 }
 
 /**
- * Logs an administrative action to the audit trail
+ * Logs an administrative action to the audit trail.
  */
 export function logAdminAction(params: {
     action: string;
@@ -31,7 +30,7 @@ export function logAdminAction(params: {
     const createdAt = new Date().toISOString();
     const tenantId = params.tenant_id || null;
     const details = params.details || null;
-    const ipAddress = params.ip_address || "local";
+    const ipAddress = params.ip_address || "unknown";
 
     try {
         db.prepare(`
@@ -53,18 +52,42 @@ export function logAdminAction(params: {
 }
 
 /**
- * Retrieves recent audit logs from SQLite
+ * Retrieves recent audit logs from SQLite with optional filtering.
  */
-export function listAdminAuditLogs(limit = 100): AuditLogRecord[] {
-    try {
-        const rows = db.prepare(`
-            SELECT id, action, tenant_id, details, ip_address, created_at
-            FROM admin_audit_logs
-            ORDER BY created_at DESC
-            LIMIT ?
-        `).all(limit) as AuditLogRecord[];
+export function listAdminAuditLogs(
+    optionsOrLimit:
+        | number
+        | {
+              limit?: number;
+              action?: string;
+              tenant_id?: string;
+              since?: string;
+          } = 100
+): AuditLogRecord[] {
+    const opts = typeof optionsOrLimit === "number" ? { limit: optionsOrLimit } : optionsOrLimit;
+    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
 
-        return rows;
+    try {
+        let sql = `SELECT id, action, tenant_id, details, ip_address, created_at FROM admin_audit_logs WHERE 1=1`;
+        const params: unknown[] = [];
+
+        if (opts.action) {
+            sql += ` AND action = ?`;
+            params.push(opts.action);
+        }
+        if (opts.tenant_id && opts.tenant_id !== "all") {
+            sql += ` AND tenant_id = ?`;
+            params.push(opts.tenant_id);
+        }
+        if (opts.since) {
+            sql += ` AND created_at >= ?`;
+            params.push(opts.since);
+        }
+
+        sql += ` ORDER BY created_at DESC LIMIT ?`;
+        params.push(limit);
+
+        return db.prepare(sql).all(...params) as AuditLogRecord[];
     } catch (err) {
         console.error("[AuditLogger] Failed to list audit logs:", err);
         return [];

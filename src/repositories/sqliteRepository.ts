@@ -5,12 +5,15 @@
  * using better-sqlite3 WAL mode + in-memory L1 cache.
  */
 
+import crypto from "node:crypto";
 import db from "../db/schema.js";
 import type { CircuitRow, BaselineRow, ObservationRow, CheckpointEntry } from "../types/index.js";
 import type {
     ICircuitBreakerRepository,
     IBaselineRepository,
     ICausalTraceRepository,
+    QueryHistoryOptions,
+    QueryHistoryResult,
 } from "./interfaces.js";
 import { getTenantContext } from "../utils/auth.js";
 import { CheckpointLimitError, MAX_CHECKPOINTS } from "../utils/storage.js";
@@ -80,10 +83,13 @@ export class SqliteCircuitBreakerRepository implements ICircuitBreakerRepository
                 state: "CLOSED" as const,
                 failure_count: 0,
                 success_count: 0,
+                half_open_success_count: 0,
                 last_failure_at: null,
                 last_success_at: null,
                 opened_at: null,
                 half_opened_at: null,
+                last_error: null,
+                last_response_time_ms: null,
                 updated_at: now,
             },
             existing ?? {},
@@ -99,20 +105,23 @@ export class SqliteCircuitBreakerRepository implements ICircuitBreakerRepository
 
         db.prepare(`
             INSERT INTO circuit_breakers
-                (tenant_id, project_id, name, state, failure_count, success_count, last_failure_at,
-                 last_success_at, opened_at, half_opened_at, updated_at)
+                (tenant_id, project_id, name, state, failure_count, success_count, half_open_success_count,
+                 last_failure_at, last_success_at, opened_at, half_opened_at, last_error, last_response_time_ms, updated_at)
             VALUES
-                (@tenant_id, @project_id, @name, @state, @failure_count, @success_count, @last_failure_at,
-                 @last_success_at, @opened_at, @half_opened_at, @updated_at)
+                (@tenant_id, @project_id, @name, @state, @failure_count, @success_count, @half_open_success_count,
+                 @last_failure_at, @last_success_at, @opened_at, @half_opened_at, @last_error, @last_response_time_ms, @updated_at)
             ON CONFLICT(tenant_id, project_id, name) DO UPDATE SET
-                state           = excluded.state,
-                failure_count   = excluded.failure_count,
-                success_count   = excluded.success_count,
-                last_failure_at = excluded.last_failure_at,
-                last_success_at = excluded.last_success_at,
-                opened_at       = excluded.opened_at,
-                half_opened_at  = excluded.half_opened_at,
-                updated_at      = excluded.updated_at
+                state                   = excluded.state,
+                failure_count           = excluded.failure_count,
+                success_count           = excluded.success_count,
+                half_open_success_count = excluded.half_open_success_count,
+                last_failure_at         = excluded.last_failure_at,
+                last_success_at         = excluded.last_success_at,
+                opened_at               = excluded.opened_at,
+                half_opened_at          = excluded.half_opened_at,
+                last_error              = excluded.last_error,
+                last_response_time_ms   = excluded.last_response_time_ms,
+                updated_at              = excluded.updated_at
         `).run(merged);
     }
 
@@ -371,6 +380,8 @@ function mapRowToEntry(row: CheckpointRow): CheckpointEntry {
         id: row.checkpoint_id,
         session_id: row.session_id,
         checkpoint_type: row.checkpoint_type as any,
+        ...(row.tool_name ? { tool_name: row.tool_name } : {}),
+        ...(row.status ? { status: row.status } : {}),
         content: row.content,
         metadata,
         tags,
@@ -435,25 +446,27 @@ export class SqliteCausalTraceRepository implements ICausalTraceRepository {
         return rows.map((r) => mapRowToEntry(r) as unknown as T);
     }
 
-    queryHistory(options: {
-        session_id: string;
-        limit?: number;
-        checkpoint_type?: string;
-        since_timestamp?: string;
-        tags?: string[];
-        tenant_id?: string;
-        project_id?: string;
-    }): { entries: CheckpointEntry[]; totalFound: number } {
+    queryHistory(options: QueryHistoryOptions): QueryHistoryResult {
         const ctx = getTenantContext();
         const tid = options.tenant_id ?? ctx.tenant_id;
         const pid = options.project_id ?? ctx.project_id;
-        const { session_id, limit = 50, checkpoint_type, since_timestamp, tags } = options;
+        const {
+            session_id,
+            limit = 50,
+            offset = 0,
+            checkpoint_type,
+            since_timestamp,
+            until_timestamp,
+            tags,
+            tag_match = "all",
+        } = options;
 
         let sql = `SELECT * FROM session_checkpoints WHERE tenant_id = ? AND project_id = ? AND session_id = ?`;
         const params: any[] = [tid, pid, session_id];
 
         if (checkpoint_type) { sql += ` AND checkpoint_type = ?`; params.push(checkpoint_type); }
         if (since_timestamp) { sql += ` AND created_at >= ?`; params.push(since_timestamp); }
+        if (until_timestamp) { sql += ` AND created_at <= ?`; params.push(until_timestamp); }
 
         sql += ` ORDER BY created_at ASC`;
 
@@ -461,10 +474,29 @@ export class SqliteCausalTraceRepository implements ICausalTraceRepository {
         let entries = rows.map(mapRowToEntry);
 
         if (tags && tags.length > 0) {
-            entries = entries.filter((e) => e.tags && tags.every((t) => e.tags!.includes(t)));
+            if (tag_match === "any") {
+                entries = entries.filter((e) => e.tags && tags.some((t) => e.tags!.includes(t)));
+            } else {
+                entries = entries.filter((e) => e.tags && tags.every((t) => e.tags!.includes(t)));
+            }
         }
 
-        return { entries: entries.slice(-limit), totalFound: entries.length };
+        const totalFound = entries.length;
+        // Apply offset from most recent end or chronological pagination:
+        // If offset is 0, keep backward-compatible slice(-limit) for latest entries;
+        // if offset > 0, slice chronologically with offset & limit.
+        let paginated: CheckpointEntry[];
+        if (offset > 0) {
+            paginated = entries.slice(offset, offset + limit);
+        } else {
+            paginated = entries.slice(-limit);
+        }
+
+        return {
+            entries: paginated,
+            totalFound,
+            hasMore: offset > 0 ? offset + paginated.length < totalFound : totalFound > limit,
+        };
     }
 
     getLineageForFailures(sessionId: string, failedCheckpointIds: string[], tenantId?: string, projectId?: string): CheckpointEntry[] {

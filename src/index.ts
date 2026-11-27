@@ -2,13 +2,15 @@ import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import cors from "cors";
 import morgan from "morgan";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-
+import { z } from "zod";
 
 // Tools
 import { healthCheckTool } from "./tools/healthCheck.js";
@@ -19,33 +21,199 @@ import { getSessionHistoryTool } from "./tools/getSessionHistory.js";
 import { circuitBreakerTools } from "./tools/circuitBreaker.js";
 import { causalChainTools } from "./tools/causalChain.js";
 import { adaptiveBaselineTools } from "./tools/adaptiveBaseline.js";
-import { getStorageStats } from "./utils/storage.js";
-import { getAllCircuits, upsertCircuit } from "./utils/circuitStore.js";
-import { getBaselineStats } from "./utils/metricStore.js";
 
+// Infrastructure & Utilities
 import { initializeDatabase } from "./db/schema.js";
-import { authenticateRequest, tenantContextStorage, verifyAdminKey } from "./utils/auth.js";
+import db from "./db/schema.js";
+import { RepositoryFactory } from "./repositories/factory.js";
+import { getStorageStats } from "./utils/storage.js";
+import { getAllCircuitsAsync, upsertCircuitAsync } from "./utils/circuitStore.js";
+import { getBaselineStatsAsync } from "./utils/metricStore.js";
+import { authenticateRequest, tenantContextStorage, verifyAdminKey, type TenantIdentity } from "./utils/auth.js";
 import { runDatabaseMaintenance } from "./utils/maintenance.js";
-import { logCall, getUsageStats, getAllTenantsStats, getMonthlyUsageSummary } from "./utils/callLogger.js";
+import { getUsageStats, getAllTenantsStats, getMonthlyUsageSummary, getPrometheusMetrics } from "./utils/callLogger.js";
 import { checkTenantRateLimit } from "./utils/rateLimiter.js";
 import { createApiKey, listApiKeys, revokeApiKey, createTenant, listTenants, getTenant, updateTenantStatus, deleteTenant } from "./utils/apiKeyStore.js";
-import { createWebhook, listWebhooks, deleteWebhook, dispatchWebhookEvent } from "./utils/webhookDispatcher.js";
+import { createWebhook, listWebhooks, deleteWebhook, listWebhookDeliveries, dispatchWebhookEvent } from "./utils/webhookDispatcher.js";
 import { logAdminAction, listAdminAuditLogs } from "./utils/auditLogger.js";
+import { attachMcpCallTelemetry } from "./middleware/requestLogger.js";
+import { parseEnvInt } from "./utils/validation.js";
 
+export const SERVER_NAME = "AgentGuard MCP";
+export const SERVER_VERSION = "3.1.2";
+const START_TIME = Date.now();
+
+export const REGISTERED_TOOLS = [
+    "health_check",
+    "validate_tool_response",
+    "log_checkpoint",
+    "detect_anomaly",
+    "get_session_history",
+    "report_tool_result",
+    "get_circuit_state",
+    "reset_circuit",
+    "analyze_causality",
+    "record_observation",
+    "get_learned_baseline",
+    "reset_baseline",
+] as const;
 
 // ---------------------------------------------------------------------------
-// Server setup
+// MCP Server Factory (Tools + Resources + Prompts)
 // ---------------------------------------------------------------------------
 
-const app = express();
+export function createMcpServer(): McpServer {
+    const mcp = new McpServer({
+        name: SERVER_NAME,
+        version: SERVER_VERSION,
+        description:
+            "Production-grade reliability and observability infrastructure for AI agents. Detects silent failures, validates tool outputs against prompt injections, logs reasoning checkpoints with loop detection, trips circuit breakers, and provides persistent session memory.",
+    });
 
-// Request ID header middleware for request tracing
+    // Register all 12 tools
+    healthCheckTool(mcp);
+    validateToolResponseTool(mcp);
+    logCheckpointTool(mcp);
+    detectAnomalyTool(mcp);
+    getSessionHistoryTool(mcp);
+    circuitBreakerTools(mcp);
+    causalChainTools(mcp);
+    adaptiveBaselineTools(mcp);
+
+    // Register MCP Resources
+    mcp.registerResource(
+        "agentguard_status",
+        "agentguard://status",
+        {
+            title: "AgentGuard Control Plane Status",
+            description: "Live status summary, registered tools, and storage backend information",
+            mimeType: "application/json",
+        },
+        async (uri) => {
+            const dbHealth = await RepositoryFactory.getInstance().getDatabaseHealth();
+            const circuits = await getAllCircuitsAsync();
+            const baselineStats = await getBaselineStatsAsync();
+            return {
+                contents: [
+                    {
+                        uri: uri.href,
+                        mimeType: "application/json",
+                        text: JSON.stringify(
+                            {
+                                server: SERVER_NAME,
+                                version: SERVER_VERSION,
+                                uptime_seconds: Math.floor((Date.now() - START_TIME) / 1000),
+                                database_health: dbHealth,
+                                circuits_tracked: circuits.length,
+                                open_circuits: circuits.filter((c) => c.state === "OPEN").length,
+                                adaptive_baselines: baselineStats,
+                            },
+                            null,
+                            2
+                        ),
+                    },
+                ],
+            };
+        }
+    );
+
+    mcp.registerResource(
+        "agentguard_circuits",
+        "agentguard://circuits",
+        {
+            title: "Circuit Breaker Grid",
+            description: "Current state of all tracked tool circuit breakers for the active tenant",
+            mimeType: "application/json",
+        },
+        async (uri) => {
+            const circuits = await getAllCircuitsAsync();
+            return {
+                contents: [
+                    {
+                        uri: uri.href,
+                        mimeType: "application/json",
+                        text: JSON.stringify({ circuits }, null, 2),
+                    },
+                ],
+            };
+        }
+    );
+
+    // Register MCP Prompts
+    mcp.registerPrompt(
+        "pre_flight_check",
+        {
+            title: "Pre-Flight Tool Governance Check",
+            description: "Guided workflow to verify circuit breaker state and endpoint health before invoking an external tool.",
+            argsSchema: {
+                tool_name: z.string().describe("Name of the external tool or API"),
+                url: z.string().optional().describe("Optional HTTP/HTTPS endpoint URL to probe"),
+            },
+        },
+        async ({ tool_name, url }) => ({
+            messages: [
+                {
+                    role: "user",
+                    content: {
+                        type: "text",
+                        text:
+                            `Run a pre-flight safety check before calling "${tool_name}":\n` +
+                            `1. Call get_circuit_state with tool_name="${tool_name}". If state is OPEN, abort and use a fallback.\n` +
+                            (url ? `2. Call health_check on url="${url}". If unhealthy, do not proceed.\n` : "") +
+                            `3. After executing "${tool_name}", always call report_tool_result and validate_tool_response.`,
+                    },
+                },
+            ],
+        })
+    );
+
+    mcp.registerPrompt(
+        "root_cause_debug",
+        {
+            title: "Session Failure Root-Cause Analysis",
+            description: "Guided workflow to inspect session history and trace causal failure chains.",
+            argsSchema: {
+                session_id: z.string().describe("Session identifier to diagnose"),
+            },
+        },
+        async ({ session_id }) => ({
+            messages: [
+                {
+                    role: "user",
+                    content: {
+                        type: "text",
+                        text:
+                            `Diagnose failures in session "${session_id}":\n` +
+                            `1. Call get_session_history with session_id="${session_id}" and checkpoint_type="error".\n` +
+                            `2. Collect the failed checkpoint UUIDs and call analyze_causality with include_downstream=true.\n` +
+                            `3. Summarize the root-cause candidate and impacted downstream steps.`,
+                    },
+                },
+            ],
+        })
+    );
+
+    return mcp;
+}
+
+const server = createMcpServer();
+
+// ---------------------------------------------------------------------------
+// Express HTTP Application Setup
+// ---------------------------------------------------------------------------
+
+export const app = express();
+
+// Trust first reverse-proxy hop by default (Render, Railway, Cloudflare, Nginx)
+const trustProxyRaw = process.env.TRUST_PROXY;
+app.set("trust proxy", trustProxyRaw === "false" ? false : trustProxyRaw ? parseEnvInt("TRUST_PROXY", 1, 0, 10) : 1);
+
+// Request ID & UTF-8 charset enforcement middleware
 app.use((req: Request, res: Response, next: NextFunction) => {
     const requestId = (req.headers["x-request-id"] as string) || randomUUID();
     req.headers["x-request-id"] = requestId;
     res.setHeader("X-Request-ID", requestId);
 
-    // Enforce UTF-8 charset on Content-Type headers so HTTP clients (e.g. Python requests) decode emojis cleanly
     const originalSetHeader = res.setHeader.bind(res);
     res.setHeader = function (name: string, value: any) {
         if (typeof name === "string" && name.toLowerCase() === "content-type") {
@@ -59,30 +227,23 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     next();
 });
 
-// HTTP security headers via helmet (disable CSP header to allow standalone admin console script execution)
-app.use(helmet({ contentSecurityPolicy: false }));
+// Full Helmet security headers (CSP enabled globally; tailored per-route only for /admin HTML)
+app.use(helmet());
 
-// CORS configuration (allow all origins by default, configurable via CORS_ORIGIN)
 app.use(cors({ origin: process.env.CORS_ORIGIN || "*" }));
-
-// Production HTTP request logger
 app.use(morgan(":method :url :status :res[content-length] - :response-time ms [req-id: :req[x-request-id]]"));
-
 app.use(express.json({ limit: "2mb" }));
 
-// ---------------------------------------------------------------------------
-// Rate limiting — 100 requests per 15 minutes per IP
-// ---------------------------------------------------------------------------
-
-const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
-const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "500", 10);
+// Global IP rate limiter
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const RATE_LIMIT_MAX = parseEnvInt("RATE_LIMIT_MAX", 500, 1);
 
 app.use(
     rateLimit({
         windowMs: RATE_LIMIT_WINDOW_MS,
         max: RATE_LIMIT_MAX,
-        standardHeaders: true,  // Return RateLimit-* headers (RFC 6585 draft)
-        legacyHeaders: false,   // Disable X-RateLimit-* legacy headers
+        standardHeaders: true,
+        legacyHeaders: false,
         handler: (_req: Request, res: Response) => {
             res.status(429).json({
                 error: "Too Many Requests",
@@ -94,72 +255,37 @@ app.use(
     })
 );
 
-const SERVER_NAME = "AgentGuard MCP";
-const SERVER_VERSION = "3.1.0";
-const START_TIME = Date.now();
-
-const REGISTERED_TOOLS = [
-    "health_check",
-    "validate_tool_response",
-    "log_checkpoint",
-    "detect_anomaly",
-    "get_session_history",
-    // Circuit Breaker (v2.0.0)
-    "report_tool_result",
-    "get_circuit_state",
-    "reset_circuit",
-    // Causal Chain (v2.0.0)
-    "analyze_causality",
-    // Adaptive Baseline Learning (v2.0.0)
-    "record_observation",
-    "get_learned_baseline",
-    "reset_baseline",
-] as const;
-
-// Create MCP server
-const server = new McpServer({
-    name: SERVER_NAME,
-    version: SERVER_VERSION,
-    description:
-        "Production-grade reliability and observability infrastructure for AI agents. Detects silent failures, validates tool outputs, logs reasoning checkpoints, flags anomalies, and provides persistent session memory.",
-});
-
-// Register all tools
-healthCheckTool(server);
-validateToolResponseTool(server);
-logCheckpointTool(server);
-detectAnomalyTool(server);
-getSessionHistoryTool(server);
-// v2.0.0 tools
-circuitBreakerTools(server);
-causalChainTools(server);
-adaptiveBaselineTools(server);
-
 // ---------------------------------------------------------------------------
-// Authentication middleware — protects MCP tool calls via Bearer token & sets tenant context
+// Auth & Quota Helper for MCP Endpoints
 // ---------------------------------------------------------------------------
+
+function enforceMcpAuth(req: Request, res: Response, next: NextFunction): void {
+    const result = authenticateRequest(req);
+    if (!result.authenticated) {
+        res.status(401).json({
+            error: "UNAUTHORIZED",
+            message: result.error,
+            hint: "Set AGENTGUARD_API_KEY or generate a tenant key and pass: Authorization: Bearer <key>",
+            timestamp: new Date().toISOString(),
+        });
+        return;
+    }
+    if (result.identity) {
+        (req as any).tenantIdentity = result.identity;
+    }
+    next();
+}
 
 app.use("/mcp", (req: Request, res: Response, next: NextFunction) => {
     if (req.method === "POST") {
-        const result = authenticateRequest(req);
-        if (!result.authenticated) {
-            res.status(401).json({
-                error: "UNAUTHORIZED",
-                message: result.error,
-                hint: "Set AGENTGUARD_API_KEY environment variable and pass it as: Authorization: Bearer <key>",
-                timestamp: new Date().toISOString(),
-            });
-            return;
-        }
-        if (result.identity) {
-            (req as any).tenantIdentity = result.identity;
-        }
+        enforceMcpAuth(req, res, next);
+        return;
     }
     next();
 });
 
 // ---------------------------------------------------------------------------
-// MCP endpoint — stateless StreamableHTTP (MCP protocol rev. July 2026)
+// MCP StreamableHTTP Endpoint
 // ---------------------------------------------------------------------------
 
 app.get("/mcp", (_req: Request, res: Response) => {
@@ -174,9 +300,10 @@ app.get("/mcp", (_req: Request, res: Response) => {
             headers: {
                 "Content-Type": "application/json",
                 "Accept": "application/json, text/event-stream",
-                "Authorization": "Bearer <your-api-key>"
-            }
+                "Authorization": "Bearer <your-api-key>",
+            },
         },
+        sse_endpoint: "/sse",
         admin_console: "/admin",
         health_check: "/health",
         registered_tools_count: REGISTERED_TOOLS.length,
@@ -186,20 +313,31 @@ app.get("/mcp", (_req: Request, res: Response) => {
 });
 
 app.post("/mcp", async (req: Request, res: Response) => {
-    const startTime = Date.now();
-
-    let isSuccess = true;
-    let errorCode: string | undefined = undefined;
-
-    // Extract tool name from request body
     const toolName = req.body?.params?.name || "unknown";
-    const tenantCtx = (req as any).tenantIdentity;
+    const rpcMethod = req.body?.method || "";
+    const tenantCtx: TenantIdentity | undefined = (req as any).tenantIdentity;
     const tenantId = tenantCtx?.tenant_id || "default-tenant";
 
-    // Rate Limiting & Plan Quota Enforcement
+    // Enforce per-key tool scopes if configured on the API key
+    if (
+        rpcMethod === "tools/call" &&
+        tenantCtx?.scopes &&
+        tenantCtx.scopes.length > 0 &&
+        !tenantCtx.scopes.includes("*") &&
+        !tenantCtx.scopes.includes(toolName)
+    ) {
+        res.status(403).json({
+            error: "FORBIDDEN_SCOPE",
+            message: `API key is not authorized to invoke tool "${toolName}". Allowed scopes: ${tenantCtx.scopes.join(", ")}`,
+            timestamp: new Date().toISOString(),
+        });
+        return;
+    }
+
+    // Per-tenant rate limit & monthly quota enforcement
     const rateLimitCheck = checkTenantRateLimit(tenantId);
     if (!rateLimitCheck.allowed) {
-        res.setHeader("Retry-After", String(rateLimitCheck.resetAt - Math.floor(Date.now() / 1000)));
+        res.setHeader("Retry-After", String(Math.max(1, rateLimitCheck.resetAt - Math.floor(Date.now() / 1000))));
         res.setHeader("X-RateLimit-Limit", rateLimitCheck.limit);
         res.setHeader("X-RateLimit-Remaining", 0);
 
@@ -229,99 +367,102 @@ app.post("/mcp", async (req: Request, res: Response) => {
         return;
     }
 
-    // Wrap res.write & res.end to measure response timing & capture completion state
-    const originalWrite = res.write.bind(res);
-    const originalEnd = res.end.bind(res);
-    let responseBody = "";
-
-    res.write = function (chunk: any, ...args: any[]) {
-        if (chunk) {
-            responseBody += chunk.toString();
-        }
-        return originalWrite(chunk, ...args);
-    };
-
-    res.end = function (chunk?: any, ...args: any[]) {
-        if (chunk) {
-            responseBody += chunk.toString();
-        }
-        const responseTime = Date.now() - startTime;
-
-        if (res.statusCode >= 400) {
-            isSuccess = false;
-            errorCode = `HTTP_${res.statusCode}`;
-        } else if (
-            responseBody.includes('"isError":true') ||
-            responseBody.includes('"_error"') ||
-            responseBody.includes('"error":{') ||
-            responseBody.includes('"error": {')
-        ) {
-            isSuccess = false;
-            try {
-                const match =
-                    responseBody.match(/"error"\s*:\s*"([^"]+)"/) ||
-                    responseBody.match(/"code"\s*:\s*"?([^",}\s]+)"?/);
-                if (match && match[1]) {
-                    errorCode = match[1];
-                }
-            } catch { /* ignore */ }
-        }
-
-        logCall({
-            tenant_id: tenantId,
-            project_id: tenantCtx?.project_id || "default-project",
-            env: tenantCtx?.env || (process.env.AGENTGUARD_API_KEY ? "production" : "development"),
-            tool_name: toolName,
-            success: isSuccess,
-            response_time_ms: responseTime,
-            ...(errorCode && { error_code: errorCode }),
-        });
-
-        return originalEnd(chunk, ...args);
-    };
+    attachMcpCallTelemetry(req, res, tenantCtx);
 
     try {
-        const identity = (req as any).tenantIdentity;
         const handleMcpRequest = async () => {
+            const requestServer = createMcpServer();
             const transport = new StreamableHTTPServerTransport({
-                sessionIdGenerator: undefined, // stateless mode — no in-memory session state
+                sessionIdGenerator: undefined,
             });
 
-            res.on("close", () => transport.close());
-            await server.connect(transport);
+            res.on("close", () => {
+                transport.close().catch(() => {});
+                requestServer.close().catch(() => {});
+            });
+            await requestServer.connect(transport);
             await transport.handleRequest(req, res, req.body);
         };
 
-        if (identity) {
-            await tenantContextStorage.run(identity, handleMcpRequest);
+        if (tenantCtx) {
+            await tenantContextStorage.run(tenantCtx, handleMcpRequest);
         } else {
             await handleMcpRequest();
         }
     } catch (error) {
         console.error("[AgentGuard] MCP request error:", error);
-        res.status(500).json({
-            error: "Internal server error",
-            message: error instanceof Error ? error.message : String(error),
-            timestamp: new Date().toISOString(),
-        });
+        if (!res.headersSent) {
+            res.status(500).json({
+                error: "Internal server error",
+                message: error instanceof Error ? error.message : String(error),
+                timestamp: new Date().toISOString(),
+            });
+        }
     }
 });
 
-// Dedicated Rate Limiter for Admin Endpoints to prevent brute-forcing
+// ---------------------------------------------------------------------------
+// Legacy SSE Transport (/sse + /messages) for SSE MCP Clients
+// ---------------------------------------------------------------------------
+
+const sseSessions = new Map<string, { transport: SSEServerTransport; server: McpServer; identity?: TenantIdentity }>();
+
+app.get("/sse", enforceMcpAuth, async (req: Request, res: Response) => {
+    const identity: TenantIdentity | undefined = (req as any).tenantIdentity;
+    const sseServer = createMcpServer();
+    const transport = new SSEServerTransport("/messages", res);
+    sseSessions.set(transport.sessionId, { transport, server: sseServer, identity });
+
+    res.on("close", () => {
+        sseSessions.delete(transport.sessionId);
+        sseServer.close().catch(() => {});
+    });
+
+    if (identity) {
+        await tenantContextStorage.run(identity, () => sseServer.connect(transport));
+    } else {
+        await sseServer.connect(transport);
+    }
+});
+
+app.post("/messages", enforceMcpAuth, async (req: Request, res: Response) => {
+    const sessionId = String(req.query.sessionId || "");
+    const session = sseSessions.get(sessionId);
+    if (!session) {
+        res.status(404).json({ error: "SSE session not found", sessionId });
+        return;
+    }
+
+    const identity = session.identity || (req as any).tenantIdentity;
+    if (identity) {
+        await tenantContextStorage.run(identity, () => session.transport.handlePostMessage(req, res, req.body));
+    } else {
+        await session.transport.handlePostMessage(req, res, req.body);
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Admin Endpoints & Standalone Admin Console (/admin)
+// ---------------------------------------------------------------------------
+
 const adminRateLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 300,
+    max: 120,
     standardHeaders: true,
     legacyHeaders: false,
-    message: { error: "TOO_MANY_REQUESTS", message: "Admin rate limit exceeded. Please wait 1 minute." }
+    message: { error: "TOO_MANY_REQUESTS", message: "Admin rate limit exceeded. Please wait 1 minute." },
 });
 
 app.use("/admin", adminRateLimiter);
 
-// Serve standalone Admin Console single-page web app for browser requests
+// Serve standalone Admin Console HTML with route-specific CSP
 app.get("/admin", (req: Request, res: Response, next: NextFunction) => {
     if (req.headers.accept?.includes("text/html") || !req.headers.authorization) {
         const adminPath = path.resolve(__dirname, "..", "public", "admin.html");
+        res.setHeader(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; script-src-attr 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http: https:; img-src 'self' data:;"
+        );
         res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         res.setHeader("Pragma", "no-cache");
         res.setHeader("Expires", "0");
@@ -331,7 +472,6 @@ app.get("/admin", (req: Request, res: Response, next: NextFunction) => {
     next();
 });
 
-// Admin Auth Middleware Helper for JSON API endpoints
 function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
     if (req.method === "OPTIONS") {
         next();
@@ -339,7 +479,11 @@ function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
     }
     const auth = req.headers.authorization;
     if (!verifyAdminKey(auth)) {
-        res.status(401).json({ error: "Unauthorized", message: "Invalid or missing Admin API Key", timestamp: new Date().toISOString() });
+        res.status(401).json({
+            error: "Unauthorized",
+            message: "Invalid or missing Admin API Key",
+            timestamp: new Date().toISOString(),
+        });
         return;
     }
     next();
@@ -347,8 +491,36 @@ function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
 
 app.use("/admin", requireAdminAuth);
 
+// Zod schemas for Admin REST endpoints
+const CreateTenantBodySchema = z.object({
+    tenant_id: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/, "tenant_id must be alphanumeric with dashes/underscores"),
+    name: z.string().min(1).max(128),
+    plan: z.enum(["free", "starter", "pro", "team"]).optional(),
+    email: z.string().email().max(254).optional().or(z.literal("")),
+    notes: z.string().max(2000).optional(),
+});
 
-// Usage Analytics
+const UpdateTenantBodySchema = z.object({
+    status: z.enum(["active", "suspended"]).optional(),
+    plan: z.enum(["free", "starter", "pro", "team"]).optional(),
+    notes: z.string().max(2000).optional(),
+    email: z.string().email().max(254).optional().or(z.literal("")),
+});
+
+const CreateApiKeyBodySchema = z.object({
+    tenant_id: z.string().min(1).max(64),
+    name: z.string().min(1).max(128).optional(),
+    expires_in_days: z.number().int().min(1).max(3650).optional(),
+    expires_at: z.string().optional(),
+    scopes: z.array(z.string().min(1).max(64)).max(32).optional(),
+});
+
+const CreateWebhookBodySchema = z.object({
+    tenant_id: z.string().min(1).max(64),
+    url: z.string().url().max(2048),
+    events: z.array(z.string().min(1)).optional(),
+});
+
 app.get("/admin/usage", (req: Request, res: Response) => {
     const tenant_id = (req.query.tenant_id as string) || "all";
     const month = (req.query.month as string) || new Date().toISOString().slice(0, 7);
@@ -363,18 +535,24 @@ app.get("/admin/usage", (req: Request, res: Response) => {
     });
 });
 
-// Tenants Management
+app.get("/admin/metrics", (_req: Request, res: Response) => {
+    const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
+    res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+    res.send(getPrometheusMetrics(uptimeSeconds));
+});
+
 app.get("/admin/tenants", (_req: Request, res: Response) => {
     res.json({ tenants: listTenants(), timestamp: new Date().toISOString() });
 });
 
 app.post("/admin/tenants", (req: Request, res: Response) => {
-    const { tenant_id, name, plan, email, notes } = req.body || {};
-    if (!tenant_id || !name) {
-        res.status(400).json({ error: "Missing required fields: tenant_id, name" });
+    const parsed = CreateTenantBodySchema.safeParse(req.body || {});
+    if (!parsed.success) {
+        res.status(400).json({ error: "Invalid request payload", details: parsed.error.issues });
         return;
     }
-    const tenant = createTenant({ tenant_id, name, plan, email, notes });
+    const { tenant_id, name, plan, email, notes } = parsed.data;
+    const tenant = createTenant({ tenant_id, name, plan, email: email || undefined, notes });
     logAdminAction({
         action: "CREATE_TENANT",
         tenant_id: tenant.tenant_id,
@@ -384,11 +562,15 @@ app.post("/admin/tenants", (req: Request, res: Response) => {
     res.json({ tenant, timestamp: new Date().toISOString() });
 });
 
-
 app.patch("/admin/tenants/:id", (req: Request, res: Response) => {
     const tenant_id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const { status, plan, notes, email } = req.body || {};
-    const updated = updateTenantStatus({ tenant_id, status, plan, notes, email });
+    const parsed = UpdateTenantBodySchema.safeParse(req.body || {});
+    if (!parsed.success) {
+        res.status(400).json({ error: "Invalid request payload", details: parsed.error.issues });
+        return;
+    }
+    const { status, plan, notes, email } = parsed.data;
+    const updated = updateTenantStatus({ tenant_id, status, plan, notes, email: email === "" ? undefined : email });
     if (!updated) {
         res.status(404).json({ error: "Tenant not found" });
         return;
@@ -401,7 +583,6 @@ app.patch("/admin/tenants/:id", (req: Request, res: Response) => {
     });
     res.json({ tenant: updated, timestamp: new Date().toISOString() });
 });
-
 
 app.delete("/admin/tenants/:id", (req: Request, res: Response) => {
     const tenant_id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
@@ -432,25 +613,23 @@ app.delete("/admin/tenants/:id", (req: Request, res: Response) => {
     }
 });
 
-
-// API Keys Management
 app.get("/admin/api-keys", (req: Request, res: Response) => {
     const tenant_id = req.query.tenant_id as string;
     res.json({ api_keys: listApiKeys(tenant_id), timestamp: new Date().toISOString() });
 });
 
 app.post("/admin/api-keys", (req: Request, res: Response) => {
-    const { tenant_id, name } = req.body || {};
-    if (!tenant_id) {
-        res.status(400).json({ error: "Missing required field: tenant_id" });
+    const parsed = CreateApiKeyBodySchema.safeParse(req.body || {});
+    if (!parsed.success) {
+        res.status(400).json({ error: "Invalid request payload", details: parsed.error.issues });
         return;
     }
     try {
-        const apiKey = createApiKey({ tenant_id, name });
+        const apiKey = createApiKey(parsed.data);
         logAdminAction({
             action: "CREATE_API_KEY",
             tenant_id: apiKey.tenant_id,
-            details: `Generated API Key '${apiKey.prefix}' (${apiKey.name})`,
+            details: `Generated API Key '${apiKey.prefix}' (${apiKey.name})${apiKey.expires_at ? ` expires ${apiKey.expires_at}` : ""}`,
             ip_address: req.ip || req.socket.remoteAddress,
         });
         res.json({
@@ -460,6 +639,8 @@ app.post("/admin/api-keys", (req: Request, res: Response) => {
             prefix: apiKey.prefix,
             tenant_id: apiKey.tenant_id,
             name: apiKey.name,
+            expires_at: apiKey.expires_at,
+            scopes: apiKey.scopes,
             timestamp: new Date().toISOString(),
         });
     } catch (err: any) {
@@ -482,26 +663,35 @@ app.delete("/admin/api-keys/:id", (req: Request, res: Response) => {
     res.json({ message: "API key revoked successfully", timestamp: new Date().toISOString() });
 });
 
-// Webhooks Management
 app.get("/admin/webhooks", (req: Request, res: Response) => {
     const tenant_id = req.query.tenant_id as string;
     res.json({ webhooks: listWebhooks(tenant_id), timestamp: new Date().toISOString() });
 });
 
+app.get("/admin/webhooks/deliveries", (req: Request, res: Response) => {
+    const tenant_id = req.query.tenant_id as string;
+    const limit = parseInt(String(req.query.limit || "50"), 10) || 50;
+    res.json({ deliveries: listWebhookDeliveries(tenant_id, limit), timestamp: new Date().toISOString() });
+});
+
 app.post("/admin/webhooks", (req: Request, res: Response) => {
-    const { tenant_id, url, events } = req.body || {};
-    if (!tenant_id || !url) {
-        res.status(400).json({ error: "Missing required fields: tenant_id, url" });
+    const parsed = CreateWebhookBodySchema.safeParse(req.body || {});
+    if (!parsed.success) {
+        res.status(400).json({ error: "Invalid request payload", details: parsed.error.issues });
         return;
     }
-    const webhook = createWebhook({ tenant_id, url, events });
-    logAdminAction({
-        action: "CREATE_WEBHOOK",
-        tenant_id: webhook.tenant_id,
-        details: `Subscribed webhook '${webhook.id}' to '${webhook.url}'`,
-        ip_address: req.ip || req.socket.remoteAddress,
-    });
-    res.json({ webhook, timestamp: new Date().toISOString() });
+    try {
+        const webhook = createWebhook(parsed.data);
+        logAdminAction({
+            action: "CREATE_WEBHOOK",
+            tenant_id: webhook.tenant_id,
+            details: `Subscribed webhook '${webhook.id}' to '${webhook.url}'`,
+            ip_address: req.ip || req.socket.remoteAddress,
+        });
+        res.json({ webhook, timestamp: new Date().toISOString() });
+    } catch (err: any) {
+        res.status(400).json({ error: err.message || "Invalid webhook configuration" });
+    }
 });
 
 app.delete("/admin/webhooks/:id", (req: Request, res: Response) => {
@@ -519,52 +709,65 @@ app.delete("/admin/webhooks/:id", (req: Request, res: Response) => {
     res.json({ message: "Webhook deleted successfully", timestamp: new Date().toISOString() });
 });
 
-
-// Circuit Breakers List & Reset
-app.get("/admin/circuits", (_req: Request, res: Response) => {
-    res.json({ circuits: getAllCircuits(), timestamp: new Date().toISOString() });
+app.get("/admin/circuits", async (_req: Request, res: Response) => {
+    const circuits = await getAllCircuitsAsync();
+    res.json({ circuits, timestamp: new Date().toISOString() });
 });
 
-app.post("/admin/circuits/:name/reset", (req: Request, res: Response) => {
+app.post("/admin/circuits/:name/reset", async (req: Request, res: Response) => {
     const circuitName = Array.isArray(req.params.name) ? req.params.name[0] : req.params.name;
     try {
         const decodedName = decodeURIComponent(circuitName);
-        upsertCircuit(decodedName, {
+        await upsertCircuitAsync(decodedName, {
             state: "CLOSED",
             failure_count: 0,
-            success_count: 0,
+            half_open_success_count: 0,
             opened_at: null,
             half_opened_at: null,
+            last_error: null,
         });
         logAdminAction({
             action: "RESET_CIRCUIT",
             details: `Reset circuit breaker '${decodedName}' to CLOSED`,
             ip_address: req.ip || req.socket.remoteAddress,
         });
-        res.json({ message: `Circuit '${circuitName}' reset to CLOSED`, timestamp: new Date().toISOString() });
+        res.json({ message: `Circuit '${decodedName}' reset to CLOSED`, timestamp: new Date().toISOString() });
     } catch (err: any) {
         res.status(400).json({ error: err.message || "Failed to reset circuit" });
     }
 });
 
-// Admin Audit Logs Endpoint
-app.get("/admin/audit-logs", (_req: Request, res: Response) => {
-    const logs = listAdminAuditLogs(100);
+app.get("/admin/audit-logs", (req: Request, res: Response) => {
+    const limit = parseInt(String(req.query.limit || "100"), 10) || 100;
+    const action = req.query.action as string | undefined;
+    const tenant_id = req.query.tenant_id as string | undefined;
+    const since = req.query.since as string | undefined;
+
+    const logs = listAdminAuditLogs({ limit, action, tenant_id, since });
     res.json({ audit_logs: logs, timestamp: new Date().toISOString() });
 });
 
-
+app.post("/admin/maintenance", async (req: Request, res: Response) => {
+    try {
+        const result = await runDatabaseMaintenance();
+        logAdminAction({
+            action: "RUN_MAINTENANCE",
+            details: `Pruned ${result.deleted_checkpoints} checkpoints, ${result.deleted_observations} observations, ${result.deleted_call_logs} call logs`,
+            ip_address: req.ip || req.socket.remoteAddress,
+        });
+        res.json({ maintenance: result, timestamp: new Date().toISOString() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message || "Maintenance failed" });
+    }
+});
 
 // ---------------------------------------------------------------------------
-// Health endpoint — uptime monitoring for Railway / Cloudflare / k8s probes
+// Health endpoint
 // ---------------------------------------------------------------------------
-
-import { RepositoryFactory } from "./repositories/factory.js";
 
 app.get("/health", async (_req: Request, res: Response) => {
     const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
 
-    // Database repository health probe
     const dbHealth = await RepositoryFactory.getInstance().getDatabaseHealth().catch((err) => ({
         healthy: false,
         backend: RepositoryFactory.getInstance().getBackend(),
@@ -573,40 +776,36 @@ app.get("/health", async (_req: Request, res: Response) => {
         error: String(err),
     }));
 
-    // Storage stats — never let a failure break the health probe
     const storage = await getStorageStats().catch(() => ({
         total_sessions: -1,
         total_checkpoints: -1,
     }));
 
-    // Circuit breaker stats — wrapped for safety
     let total_circuits = 0;
     let open_circuits = 0;
     let half_open_circuits = 0;
     try {
-        const circuits = getAllCircuits();
+        const circuits = await getAllCircuitsAsync();
         total_circuits = circuits.length;
         open_circuits = circuits.filter((c) => c.state === "OPEN").length;
         half_open_circuits = circuits.filter((c) => c.state === "HALF_OPEN").length;
     } catch { /* non-fatal */ }
 
-    // Adaptive baseline stats
     let total_metrics_tracked = 0;
     let confident_baselines = 0;
     try {
-        const baselineStats = getBaselineStats();
+        const baselineStats = await getBaselineStatsAsync();
         total_metrics_tracked = baselineStats.total_metrics_tracked;
         confident_baselines = baselineStats.confident_baselines;
     } catch { /* non-fatal */ }
 
-    // Monthly usage stats — wrapped for safety
     let usageSummary = { total_calls_this_month: 0, active_tenants_this_month: 0 };
     try {
         usageSummary = getMonthlyUsageSummary();
     } catch { /* non-fatal */ }
 
     res.json({
-        status: "ok",
+        status: dbHealth.healthy ? "ok" : "degraded",
         server: SERVER_NAME,
         version: SERVER_VERSION,
         uptime_seconds: uptimeSeconds,
@@ -617,7 +816,7 @@ app.get("/health", async (_req: Request, res: Response) => {
         storage: {
             total_sessions: storage.total_sessions,
             total_checkpoints: storage.total_checkpoints,
-            checkpoint_limit_per_session: parseInt(process.env.MAX_CHECKPOINTS ?? "10000", 10),
+            checkpoint_limit_per_session: parseEnvInt("MAX_CHECKPOINTS", 10000, 1),
         },
         usage: usageSummary,
         storage_mode: dbHealth.backend,
@@ -641,86 +840,122 @@ app.get("/health", async (_req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
-// 404 handler for unknown routes
+// 404 Handler
 // ---------------------------------------------------------------------------
 
 app.use((_req: Request, res: Response) => {
     res.status(404).json({
         error: "Not Found",
-        message: "Available endpoints: POST /mcp, GET /health, GET /admin (Admin Console UI), GET /admin/usage, GET /admin/tenants, GET /admin/api-keys, GET /admin/circuits, GET /admin/webhooks",
+        message:
+            "Available endpoints: POST /mcp, GET /sse, POST /messages, GET /health, GET /admin (Admin Console UI), GET /admin/usage, GET /admin/metrics, GET /admin/tenants, GET /admin/api-keys, GET /admin/circuits, GET /admin/webhooks, POST /admin/maintenance",
         timestamp: new Date().toISOString(),
     });
 });
 
 // ---------------------------------------------------------------------------
-// Startup
+// Startup (HTTP or Stdio transport)
 // ---------------------------------------------------------------------------
 
-// Ensure SQLite tables exist before the server accepts any traffic
-initializeDatabase();
-console.log("[AgentGuard] SQLite database initialized at agentguard.db");
-runDatabaseMaintenance().catch((err) =>
-    console.error("[AgentGuard] Maintenance error:", err)
-);
-
-const PORT = process.env.PORT || 3000;
-
-const httpServer = app.listen(PORT, () => {
-    console.log("");
-    console.log("┌─────────────────────────────────────────┐");
-    console.log(`│       ${SERVER_NAME} v${SERVER_VERSION}           │`);
-    console.log("├─────────────────────────────────────────┤");
-    console.log(`│  MCP endpoint  : http://localhost:${PORT}/mcp │`);
-    console.log(`│  Admin Console : http://localhost:${PORT}/admin │`);
-    console.log(`│  Health check  : http://localhost:${PORT}/health│`);
-    console.log("├─────────────────────────────────────────┤");
-    console.log("│  Registered tools:                      │");
-    REGISTERED_TOOLS.forEach((t) => console.log(`│    • ${t.padEnd(33)}│`));
-    console.log("└─────────────────────────────────────────┘");
-
-    console.log("");
-    console.log(
-        "[AgentGuard] ℹ️  Storage: SQLite WAL-mode (unified single-instance)."
-    );
-
-    if (!process.env.AGENTGUARD_API_KEY) {
-        console.warn(
-            "[AgentGuard] ⚠️  AGENTGUARD_API_KEY not set — running in OPEN mode. Set this in production."
-        );
-    } else {
-        console.log("[AgentGuard] ✅  API key authentication enabled");
-    }
-
-    if (!process.env.AGENTGUARD_ADMIN_KEY) {
-        console.warn(
-            "[AgentGuard] ⚠️  AGENTGUARD_ADMIN_KEY not set — Admin Console is UNPROTECTED. Set this before going live."
-        );
-    } else {
-        console.log("[AgentGuard] ✅  Admin Console protected by AGENTGUARD_ADMIN_KEY");
-    }
-});
-
-// ---------------------------------------------------------------------------
-// Graceful shutdown — flush in-flight requests before terminating
-// ---------------------------------------------------------------------------
-
-function shutdown(signal: string): void {
-    console.log(`\n[AgentGuard] Received ${signal}. Shutting down gracefully…`);
-    httpServer.close((err) => {
-        if (err) {
-            console.error("[AgentGuard] Error during shutdown:", err);
-            process.exit(1);
-        }
-        console.log("[AgentGuard] Server closed. Goodbye.");
-        process.exit(0);
-    });
-
-    // Force exit after 10 seconds if graceful close stalls
-    setTimeout(() => {
-        console.error("[AgentGuard] Forced shutdown after 10s timeout.");
-        process.exit(1);
-    }, 10_000).unref();
+async function startStdioMode(): Promise<void> {
+    initializeDatabase();
+    runDatabaseMaintenance().catch((err) => console.error("[AgentGuard] Maintenance error:", err));
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error(`[AgentGuard] ${SERVER_NAME} v${SERVER_VERSION} running on stdio transport`);
 }
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+function startHttpMode(): void {
+    initializeDatabase();
+    console.log("[AgentGuard] SQLite database initialized");
+    runDatabaseMaintenance().catch((err) =>
+        console.error("[AgentGuard] Maintenance error:", err)
+    );
+
+    // Periodic maintenance every 6 hours
+    const maintenanceInterval = setInterval(() => {
+        runDatabaseMaintenance().catch((err) =>
+            console.error("[AgentGuard] Scheduled maintenance error:", err)
+        );
+    }, 6 * 60 * 60 * 1000);
+    maintenanceInterval.unref();
+
+    const PORT = process.env.PORT || 3000;
+    const boxWidth = 50;
+    const padLine = (text: string) => `│ ${text.padEnd(boxWidth - 3)}│`;
+
+    const httpServer = app.listen(PORT, () => {
+        console.log("");
+        console.log(`┌${"─".repeat(boxWidth - 2)}┐`);
+        console.log(padLine(`     ${SERVER_NAME} v${SERVER_VERSION}`));
+        console.log(`├${"─".repeat(boxWidth - 2)}┤`);
+        console.log(padLine(`MCP endpoint  : http://localhost:${PORT}/mcp`));
+        console.log(padLine(`SSE endpoint  : http://localhost:${PORT}/sse`));
+        console.log(padLine(`Admin Console : http://localhost:${PORT}/admin`));
+        console.log(padLine(`Health check  : http://localhost:${PORT}/health`));
+        console.log(`├${"─".repeat(boxWidth - 2)}┤`);
+        console.log(padLine("Registered tools:"));
+        REGISTERED_TOOLS.forEach((t) => console.log(padLine(`  • ${t}`)));
+        console.log(`└${"─".repeat(boxWidth - 2)}┘`);
+
+        console.log("");
+        console.log(
+            `[AgentGuard] ℹ️  Storage backend: ${RepositoryFactory.getInstance().getBackend().toUpperCase()}.`
+        );
+
+        if (!process.env.AGENTGUARD_API_KEY) {
+            console.warn(
+                "[AgentGuard] ⚠️  AGENTGUARD_API_KEY not set — running in OPEN mode (unless DB keys are passed). Set this in production."
+            );
+        } else {
+            console.log("[AgentGuard] ✅  API key authentication enabled");
+        }
+
+        if (!process.env.AGENTGUARD_ADMIN_KEY) {
+            console.warn(
+                "[AgentGuard] ⚠️  AGENTGUARD_ADMIN_KEY not set — Admin Console is UNPROTECTED. Set this before going live."
+            );
+        } else {
+            console.log("[AgentGuard] ✅  Admin Console protected by AGENTGUARD_ADMIN_KEY");
+        }
+    });
+
+    function shutdown(signal: string): void {
+        console.log(`\n[AgentGuard] Received ${signal}. Shutting down gracefully…`);
+        clearInterval(maintenanceInterval);
+        for (const session of sseSessions.values()) {
+            session.server.close().catch(() => {});
+        }
+        sseSessions.clear();
+        httpServer.close((err) => {
+            try {
+                db.close();
+            } catch { /* ignore if already closed */ }
+            if (err) {
+                console.error("[AgentGuard] Error during shutdown:", err);
+                process.exit(1);
+            }
+            console.log("[AgentGuard] Server closed. Goodbye.");
+            process.exit(0);
+        });
+
+        setTimeout(() => {
+            console.error("[AgentGuard] Forced shutdown after 10s timeout.");
+            process.exit(1);
+        }, 10_000).unref();
+    }
+
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
+}
+
+if (require.main === module) {
+    const isStdio = process.argv.includes("--stdio") || process.env.MCP_TRANSPORT === "stdio";
+    if (isStdio) {
+        startStdioMode().catch((err) => {
+            console.error("[AgentGuard] Fatal stdio error:", err);
+            process.exit(1);
+        });
+    } else {
+        startHttpMode();
+    }
+}
